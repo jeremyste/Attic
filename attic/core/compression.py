@@ -25,12 +25,15 @@ class CompressionResult:
     sha256_compressed: str
 
 
-def build_zstd_argv(raw_path: str, out_path: str) -> list[str]:
+def build_zstd_argv(
+    raw_path: str, out_path: str, *,
+    level: int = ZSTD_LEVEL, long_mode: bool = ZSTD_LONG, threads: int = ZSTD_THREADS,
+) -> list[str]:
     """Assemble the zstd command line. Kept separate so it is unit-testable."""
-    argv = ["zstd", f"-{ZSTD_LEVEL}"]
-    if ZSTD_LONG:
+    argv = ["zstd", f"-{level}"]
+    if long_mode:
         argv.append("--long")
-    argv.append(f"-T{ZSTD_THREADS}")
+    argv.append(f"-T{threads}")
     # Explicit output path; -f to allow overwrite within our own staging dir;
     # -q to keep stderr for genuine errors only.
     argv += ["-q", "-f", "-o", out_path, "--", raw_path]
@@ -48,6 +51,8 @@ def compress_and_checksum(
     raw_path: str,
     out_path: str | None = None,
     *,
+    level: int = ZSTD_LEVEL,
+    long_mode: bool = ZSTD_LONG,
     timeout: float | None = None,
 ) -> CompressionResult:
     """Compress ``raw_path`` and compute SHA256 of both raw and compressed files.
@@ -56,7 +61,10 @@ def compress_and_checksum(
     """
     out_path = out_path or compressed_path_for(raw_path)
 
-    su.run(build_zstd_argv(raw_path, out_path), timeout=timeout, check=True)
+    su.run(
+        build_zstd_argv(raw_path, out_path, level=level, long_mode=long_mode),
+        timeout=timeout, check=True,
+    )
 
     raw_size = os.path.getsize(raw_path)
     comp_size = os.path.getsize(out_path)

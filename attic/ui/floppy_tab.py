@@ -17,18 +17,27 @@ class FloppyTab(PipelineTab):
         super().__init__(context, MediaType.FLOPPY, parent)
         self._worker: FloppyCaptureWorker | None = None
 
-        self.grid = TrackGrid(cylinders=80, heads=2)
+        s = context.settings
+        self.grid = TrackGrid(cylinders=s.floppy_cylinders, heads=s.floppy_heads)
         self._layout.addWidget(QLabel("Track read map (cylinder × head):"))
         self._layout.addWidget(self.grid)
         self._install_common()
 
         self.begin_btn.clicked.connect(self._begin)
 
+    def apply_settings(self) -> None:
+        s = self.context.settings
+        self.grid.reset(cylinders=s.floppy_cylinders, heads=s.floppy_heads)
+
     def _begin(self) -> None:
+        # Workflow: photo + label first, then insert the disk, then read.
         outcome = self.prompt_physical_label()
         if outcome is None:
             return
-        self.grid.reset()
+        if not self.confirm_media_loaded("floppy disk"):
+            return
+        s = self.context.settings
+        self.grid.reset(cylinders=s.floppy_cylinders, heads=s.floppy_heads)
         self.set_busy(True)
         self.set_stage("Starting…")
 

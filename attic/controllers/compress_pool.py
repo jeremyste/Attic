@@ -44,6 +44,8 @@ class FinalizeRequest:
     log_path: str = ""  # staged ddrescue/gw logfile to rename to {chosen}.log
     photo_path: str = ""  # temp webcam photo to copy in, if any
     keep_raw: bool = False  # normally False — only the compressed image is kept
+    zstd_level: int = 19
+    zstd_long: bool = True
 
 
 class _Signals(QObject):
@@ -70,7 +72,9 @@ class _FinalizeTask(QRunnable):
 
             out_path = req.staging.child(f"{req.chosen_name}.img.zst")
             self.signals.progress.emit(req.chosen_name, "Compressing")
-            result = compression.compress_and_checksum(raw_path, out_path)
+            result = compression.compress_and_checksum(
+                raw_path, out_path, level=req.zstd_level, long_mode=req.zstd_long,
+            )
 
             if not req.keep_raw:
                 _remove_quiet(raw_path)

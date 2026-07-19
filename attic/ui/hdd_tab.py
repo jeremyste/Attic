@@ -97,13 +97,11 @@ class HddTab(PipelineTab):
     # --- capture flow -------------------------------------------------------
 
     def _begin(self) -> None:
-        device = self._selected_device()
-        if device is None:
-            QMessageBox.warning(self, "No device", "Select a removable/USB drive first.")
-            return
-
-        outcome = self.prompt_physical_label()
-        if outcome is None:
+        if self.context.settings.hdd_photo_before_dock:
+            device, outcome = self._begin_photo_first()
+        else:
+            device, outcome = self._begin_device_first()
+        if device is None or outcome is None:
             return
 
         if not self._confirm_device(device):
@@ -126,6 +124,33 @@ class HddTab(PipelineTab):
         self.bar.clear()
         self.set_busy(True)
         self._start_pass(device.path, first_pass=True)
+
+    def _begin_photo_first(self):
+        """Workflow: photograph + label the drive, THEN dock and select it."""
+        outcome = self.prompt_physical_label()
+        if outcome is None:
+            return None, None
+        from .device_dialog import DeviceSelectionDialog
+
+        dlg = DeviceSelectionDialog(self, show_all=self.show_all_check.isChecked())
+        if not dlg.exec():
+            return None, None
+        device = dlg.selected_device()
+        if device is None:
+            QMessageBox.warning(self, "No device", "No drive was selected.")
+            return None, None
+        return device, outcome
+
+    def _begin_device_first(self):
+        """Legacy order: pick the already-docked drive, then photograph + label."""
+        device = self._selected_device()
+        if device is None:
+            QMessageBox.warning(self, "No device", "Select a removable/USB drive first.")
+            return None, None
+        outcome = self.prompt_physical_label()
+        if outcome is None:
+            return None, None
+        return device, outcome
 
     def _confirm_device(self, device: devices.BlockDevice) -> bool:
         """Confirm the target drive, with an extra hard gate for unsafe drives."""
@@ -160,7 +185,7 @@ class HddTab(PipelineTab):
         self.set_stage("Rescuing…")
         worker = HddRescueWorker(
             device_path, self._image_path, self._log_path, self._stderr_path,
-            first_pass=first_pass,
+            first_pass=first_pass, retries=self.context.settings.ddrescue_retries,
         )
         worker.map_progress.connect(self.bar.set_summary)
         worker.stage.connect(self.set_stage)

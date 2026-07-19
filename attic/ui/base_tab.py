@@ -50,7 +50,23 @@ class PipelineTab(QWidget):
 
     def prompt_physical_label(self) -> LabelOutcome | None:
         """Show the pre-capture label+photo dialog; None if cancelled."""
-        dlg = PhysicalLabelDialog(self.media_type, parent=self)
+        settings = self.context.settings
+        dlg = PhysicalLabelDialog(
+            self.media_type, parent=self,
+            camera_index=settings.camera_index, skip_photo=settings.skip_photo,
+        )
         if not dlg.exec():
             return None
         return dlg.outcome()
+
+    def confirm_media_loaded(self, what: str) -> bool:
+        """Gate the read on the user physically loading the media (their
+        requested workflow: photo -> label -> insert -> backup)."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.information(
+            self, "Load media",
+            f"Insert/load the {what} now, then click OK to begin capture.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+        )
+        return reply == QMessageBox.StandardButton.Ok

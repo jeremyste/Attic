@@ -23,6 +23,7 @@ from ..controllers.hdd import HddExtractResult
 from ..core import catalog, naming
 from ..core.catalog import CatalogRow
 from ..core.config import MediaType, Status
+from ..core.settings import AppSettings
 from ..core.staging import StagingDir
 from .naming_dialog import NamingDialog
 from .pending_labels_panel import PendingItem, PendingLabelsPanel
@@ -34,9 +35,19 @@ class AppContext:
     session: Session
     finalize_pool: FinalizePool
     pending_panel: PendingLabelsPanel
+    settings: AppSettings = field(default_factory=AppSettings)
     parent: QWidget | None = None
     # chosen_name -> PendingItem to add to the panel once finalize completes.
     _pending_after: dict[str, PendingItem] = field(default_factory=dict)
+
+    def _finalize_request(self, **kwargs) -> FinalizeRequest:
+        """Build a FinalizeRequest with compression options from settings."""
+        return FinalizeRequest(
+            keep_raw=self.settings.keep_raw_image,
+            zstd_level=self.settings.zstd_level,
+            zstd_long=self.settings.zstd_long,
+            **kwargs,
+        )
 
     # --- single-volume pipelines (floppy, optical) --------------------------
 
@@ -56,7 +67,11 @@ class AppContext:
         )
 
         chosen = resolution.chosen_name
-        queue_pending = resolution.used_fallback
+        # Queue in Pending Labels only when the name is a generated fallback AND
+        # the user hasn't opted to silently accept generated names.
+        queue_pending = (
+            resolution.used_fallback and not self.settings.auto_accept_fallback_names
+        )
 
         if not resolution.used_fallback:
             # Confirm/adjust with the naming dialog.
@@ -91,7 +106,7 @@ class AppContext:
             )
 
         self.finalize_pool.submit(
-            FinalizeRequest(
+            self._finalize_request(
                 working_folder=self.session.working_folder,
                 media_type=request.media_type,
                 staging=staging,
@@ -116,7 +131,9 @@ class AppContext:
             fallback_date=result.fallback_date,
         )
         chosen = resolution.chosen_name
-        queue_pending = resolution.used_fallback
+        queue_pending = (
+            resolution.used_fallback and not self.settings.auto_accept_fallback_names
+        )
 
         if not resolution.used_fallback:
             dlg = NamingDialog(
@@ -143,7 +160,7 @@ class AppContext:
             )
 
         self.finalize_pool.submit(
-            FinalizeRequest(
+            self._finalize_request(
                 working_folder=self.session.working_folder,
                 media_type=request.media_type,
                 staging=staging,

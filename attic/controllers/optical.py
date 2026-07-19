@@ -28,6 +28,10 @@ class OpticalCaptureWorker(CaptureWorker):
     # live ddrescue map summary for the rescue-bar widget
     map_progress = pyqtSignal(object)  # MapSummary
 
+    def __init__(self, request, retries: int = 3, parent=None):
+        super().__init__(request, parent)
+        self.retries = retries
+
     def capture(self, staging: StagingDir) -> CaptureArtifacts:
         device = self.request.source_id or "/dev/sr0"
         raw = staging.child("disc.img")
@@ -38,7 +42,7 @@ class OpticalCaptureWorker(CaptureWorker):
         self.log.emit(f"ddrescue {device} -> {raw}")
 
         argv = with_pkexec(
-            build_ddrescue_argv(device, raw, mapfile, optical=True)
+            build_ddrescue_argv(device, raw, mapfile, optical=True, retries=self.retries)
         )
         outcome = run_ddrescue(
             argv,

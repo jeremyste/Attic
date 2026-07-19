@@ -57,20 +57,21 @@ class HddRescueWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, device: str, image_path: str, mapfile_path: str,
-                 stderr_path: str, *, first_pass: bool, parent=None):
+                 stderr_path: str, *, first_pass: bool, retries: int = 3, parent=None):
         super().__init__(parent)
         self.device = device
         self.image_path = image_path
         self.mapfile_path = mapfile_path
         self.stderr_path = stderr_path
         self.first_pass = first_pass
+        self.retries = retries
 
     def run(self) -> None:
         self.stage.emit("Rescuing drive" if not self.first_pass else "Rescuing drive (first pass)")
         argv = with_pkexec(
             build_ddrescue_argv(
                 self.device, self.image_path, self.mapfile_path,
-                first_pass_only=self.first_pass,
+                first_pass_only=self.first_pass, retries=self.retries,
             )
         )
         self.log.emit(" ".join(argv))

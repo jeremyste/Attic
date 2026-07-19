@@ -9,6 +9,7 @@ the active tab.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QDockWidget,
     QMainWindow,
@@ -17,12 +18,14 @@ from PyQt6.QtWidgets import (
 )
 
 from ..controllers.compress_pool import FinalizePool
+from ..core.settings import load_settings, save_settings
 from .app_context import AppContext
 from .floppy_tab import FloppyTab
 from .hdd_tab import HddTab
 from .optical_tab import OpticalTab
 from .pending_labels_panel import PendingLabelsPanel
 from .session import Session
+from .settings_dialog import SettingsDialog
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +40,7 @@ class MainWindow(QMainWindow):
             session=session,
             finalize_pool=self.finalize_pool,
             pending_panel=self.pending_panel,
+            settings=load_settings(session.working_folder),
             parent=self,
         )
 
@@ -45,6 +49,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(HddTab(self.context), "HDD")
         self.tabs.addTab(OpticalTab(self.context), "Optical")
         self.setCentralWidget(self.tabs)
+
+        self._build_menu()
 
         dock = QDockWidget("Pending Labels", self)
         dock.setWidget(self.pending_panel)
@@ -62,6 +68,25 @@ class MainWindow(QMainWindow):
         self.finalize_pool.signals.failed.connect(
             lambda name, err: self.statusBar().showMessage(f"{name}: FAILED — {err}")
         )
+
+    def _build_menu(self) -> None:
+        menu = self.menuBar().addMenu("&File")
+        settings_action = QAction("&Settings…", self)
+        settings_action.triggered.connect(self._open_settings)
+        menu.addAction(settings_action)
+
+    def _open_settings(self) -> None:
+        dlg = SettingsDialog(self.context.settings, parent=self)
+        if not dlg.exec():
+            return
+        self.context.settings = dlg.result_settings()
+        save_settings(self.context.session.working_folder, self.context.settings)
+        # Push settings that affect already-built widgets.
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if hasattr(tab, "apply_settings"):
+                tab.apply_settings()
+        self.statusBar().showMessage("Settings saved to working folder.")
 
     def _on_finalize_done(self, final_dir: str, rows) -> None:
         self.context.on_finalize_done(final_dir, rows)

@@ -17,7 +17,7 @@ class OpticalTab(PipelineTab):
         super().__init__(context, MediaType.OPTICAL, parent)
         self._worker: OpticalCaptureWorker | None = None
 
-        self.device_edit = QLineEdit("/dev/sr0")
+        self.device_edit = QLineEdit(context.settings.optical_device)
         dev_row = QHBoxLayout()
         dev_row.addWidget(QLabel("Optical device:"))
         dev_row.addWidget(self.device_edit, 1)
@@ -30,9 +30,15 @@ class OpticalTab(PipelineTab):
 
         self.begin_btn.clicked.connect(self._begin)
 
+    def apply_settings(self) -> None:
+        self.device_edit.setText(self.context.settings.optical_device)
+
     def _begin(self) -> None:
+        # Workflow: photo + label first, then load the disc, then read.
         outcome = self.prompt_physical_label()
         if outcome is None:
+            return
+        if not self.confirm_media_loaded("disc"):
             return
         self.bar.clear()
         self.set_busy(True)
@@ -45,7 +51,7 @@ class OpticalTab(PipelineTab):
             source_id=self.device_edit.text().strip() or "/dev/sr0",
             photo_path=outcome.photo_path,
         )
-        worker = OpticalCaptureWorker(request)
+        worker = OpticalCaptureWorker(request, retries=self.context.settings.ddrescue_retries)
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
         worker.map_progress.connect(self.bar.set_summary)
