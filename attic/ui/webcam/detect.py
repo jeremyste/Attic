@@ -42,6 +42,12 @@ def detect_rectangle(image: np.ndarray, *, min_area_frac: float = 0.05) -> np.nd
     """Return an ordered 4-point quad of the largest rectangular object, or None.
 
     ``min_area_frac`` rejects tiny contours (fraction of the image area).
+
+    Prefers a clean 4-corner quad. When none is found — common when a hand held
+    up to the camera occludes a corner — it falls back to the rotated bounding
+    box (``cv2.minAreaRect``) of the largest sizable contour, which tolerates a
+    covered corner. Returns None only when there is nothing substantial to lock
+    onto (the caller then offers a manual crop).
     """
     if image is None or image.size == 0:
         return None
@@ -55,19 +61,32 @@ def detect_rectangle(image: np.ndarray, *, min_area_frac: float = 0.05) -> np.nd
         return None
 
     img_area = image.shape[0] * image.shape[1]
-    best = None
-    best_area = min_area_frac * img_area
+    min_area = min_area_frac * img_area
+
+    best_quad = None
+    best_quad_area = min_area
+    largest_contour = None
+    largest_area = min_area
     for c in contours:
+        area = cv2.contourArea(c)
+        if area > largest_area:
+            largest_area = area
+            largest_contour = c
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
         if len(approx) == 4 and cv2.isContourConvex(approx):
-            area = cv2.contourArea(approx)
-            if area > best_area:
-                best_area = area
-                best = approx
-    if best is None:
-        return None
-    return order_quad(best)
+            quad_area = cv2.contourArea(approx)
+            if quad_area > best_quad_area:
+                best_quad_area = quad_area
+                best_quad = approx
+    if best_quad is not None:
+        return order_quad(best_quad)
+    # Fallback: rotated bounding box of the largest contour (handles a hand
+    # covering a corner, tilt, and slightly rounded edges).
+    if largest_contour is not None:
+        box = cv2.boxPoints(cv2.minAreaRect(largest_contour))
+        return order_quad(box)
+    return None
 
 
 def four_point_transform(image: np.ndarray, quad: np.ndarray) -> np.ndarray:

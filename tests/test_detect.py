@@ -36,6 +36,36 @@ def test_detect_rectangle_none_on_blank():
     assert detect_rectangle(img) is None
 
 
+def test_detect_rectangle_fallback_on_occluded_corner():
+    # A rectangle with a corner bitten out (as a hand would) is no longer a clean
+    # 4-point convex quad, but the rotated-bbox fallback must still return 4 pts
+    # spanning roughly the whole shape.
+    img = np.zeros((300, 400, 3), dtype=np.uint8)
+    cv2.rectangle(img, (60, 50), (340, 250), (255, 255, 255), -1)
+    # Occlude the top-left corner region (simulate fingers over the corner).
+    cv2.rectangle(img, (60, 50), (150, 130), (0, 0, 0), -1)
+    quad = detect_rectangle(img)
+    assert quad is not None
+    assert quad.shape == (4, 2)
+    xs = sorted(quad[:, 0])
+    ys = sorted(quad[:, 1])
+    # Still spans most of the drawn rectangle despite the missing corner.
+    assert xs[0] < 100 and xs[-1] > 320
+    assert ys[0] < 90 and ys[-1] > 230
+
+
+def test_detect_rectangle_prefers_clean_quad_when_available():
+    # A perfectly clean rectangle should return corners very close to its extent
+    # (i.e. the quad path, not a looser fallback).
+    img = np.zeros((300, 400, 3), dtype=np.uint8)
+    cv2.rectangle(img, (60, 50), (340, 250), (255, 255, 255), -1)
+    quad = detect_rectangle(img)
+    xs = sorted(quad[:, 0])
+    ys = sorted(quad[:, 1])
+    assert abs(xs[0] - 60) < 12 and abs(xs[-1] - 340) < 12
+    assert abs(ys[0] - 50) < 12 and abs(ys[-1] - 250) < 12
+
+
 def test_four_point_transform_output_size():
     img = np.zeros((300, 400, 3), dtype=np.uint8)
     cv2.rectangle(img, (60, 50), (340, 250), (255, 255, 255), -1)
