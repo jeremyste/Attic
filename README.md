@@ -1,7 +1,7 @@
 # Attic
 
-A PyQt6 desktop application (Linux) for archiving old media — floppy disks,
-home-burned optical discs (CD/DVD), and USB-attached hard drives — into
+A PyQt6 desktop application (Linux) for archiving old media - floppy disks,
+home-burned optical discs (CD/DVD), and USB-attached hard drives - into
 compressed disk images plus expanded file folders, tracked in a single CSV
 catalog. Three independent, concurrently-operable pipelines: **Floppy**, **HDD**,
 **Optical**.
@@ -9,7 +9,7 @@ catalog. Three independent, concurrently-operable pipelines: **Floppy**, **HDD**
 ## Highlights
 
 - **Three concurrent pipelines.** Floppy, HDD, and Optical each run in their own
-  background thread — starting an HDD rescue never freezes the other tabs.
+  background thread - starting an HDD rescue never freezes the other tabs.
 - **Faithful imaging + expansion.** Every disk is imaged (`gw` for floppies,
   `ddrescue` for HDD/optical), compressed to `.zst`, checksummed, *and* its
   filesystem expanded into a browsable `Extracted Files/` folder.
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 ```
 
 `requirements.txt` installs `PyQt6`, `opencv-python`, `pytest`, and the
-Greaseweazle host tools (`gw`, installed from the upstream git repo — it is not
+Greaseweazle host tools (`gw`, installed from the upstream git repo - it is not
 published on PyPI).
 
 ### Privileges
@@ -106,37 +106,37 @@ Everything for the session goes into that one folder.
 
 Each pipeline follows the same shape:
 
-1. **Photo → label → load media → capture.** Take the item photo(s) and enter the
+1. **Photo -> label -> load media -> capture.** Take the item photo(s) and enter the
    physical label *before* inserting/loading the media (a sticker can't be read
    once a disk is in the drive). For HDDs you then dock the drive and pick it from
    a device list; a confirmation restates model/size/path before any read.
 2. **Image + detect + extract.** The raw image is captured, its filesystem is
-   auto-detected (`blkid` → `file -s` → candidate loopback mount), and recognized
+   auto-detected (`blkid` -> `file -s` -> candidate loopback mount), and recognized
    filesystems are expanded into `Extracted Files/`. Unrecognized disks keep the
-   raw image only — the pipeline never aborts over one bad disk.
+   raw image only - the pipeline never aborts over one bad disk.
 3. **Compress + checksum + catalog.** zstd (level 19, `--long`, all cores) and
    SHA-256 run in a background pool, then the job is atomically moved into place
    and a catalog row is written.
 
 ### Naming
 
-Name priority is: **physical label entered → detected volume/partition label →
+Name priority is: **physical label entered -> detected volume/partition label ->
 generated fallback** `{type}_{NNN}_{date}`. All three sources are recorded in the
 catalog even when they disagree. A disk with no physical and no detectable label
 is archived immediately under its fallback name and listed in the **Pending
 Labels** panel so it can be renamed later (which updates both the folder and the
-catalog) — or, if you enable *auto-accept generated names*, it's kept silently.
+catalog) - or, if you enable *auto-accept generated names*, it's kept silently.
 
 ### HDD safety
 
 The device list shows only removable/USB whole disks; internal and
 system-mounted disks are excluded. If a genuine target drive in an enclosure
-mis-reports as internal, enable **"Show all drives (advanced)"** — such drives are
-flagged ⚠ and require an extra, deliberate confirmation before any read.
+mis-reports as internal, enable **"Show all drives (advanced)"** - such drives are
+flagged (!) and require an extra, deliberate confirmation before any read.
 
 ## Settings
 
-Reachable via **File → Settings…**, stored as `attic_settings.json` **inside the
+Reachable via **File -> Settings...**, stored as `attic_settings.json` **inside the
 working folder** (so they travel with the archive):
 
 | Setting | Purpose |
@@ -179,8 +179,13 @@ QT_QPA_PLATFORM=offscreen pytest
 - The non-GUI core is thoroughly unit-tested; the full app constructs and the
   finalize path is verified end-to-end with real `zstd`/`sha256sum`.
 - The actual capture steps (`gw read`, `ddrescue` against real devices, live
-  webcam) require hardware and have not been exercised here — verify against your
+  webcam) require hardware and have not been exercised here - verify against your
   own rig on first use. Tool flags for `gw`/`ddrescue` are kept conservative and
   cross-version-safe; check them against your installed versions.
 - Per-partition HDD folders are auto-named from detected labels; there is no
   interactive per-partition naming dialog yet.
+
+## License
+
+Released under the GNU General Public License, version 3 (GPLv3). See
+<https://www.gnu.org/licenses/gpl-3.0.html> for the full license text.
