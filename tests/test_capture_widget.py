@@ -10,14 +10,27 @@ import attic.ui.webcam.capture_widget as cw
 
 
 class _FakeCap:
+    """Simulates a webcam whose maximum mode is 1080p; clamps requests to it."""
+
+    MAX_W, MAX_H = 1920, 1080
+
     def __init__(self, *a):
-        pass
+        self._w, self._h = 640, 480
 
     def isOpened(self):
         return True
 
+    def set(self, prop, value):
+        import cv2
+
+        if prop == cv2.CAP_PROP_FRAME_WIDTH:
+            self._w = min(int(value), self.MAX_W)
+        elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
+            self._h = min(int(value), self.MAX_H)
+        return True
+
     def read(self):
-        return True, np.zeros((240, 320, 3), dtype=np.uint8)
+        return True, np.zeros((self._h, self._w, 3), dtype=np.uint8)
 
     def release(self):
         pass
@@ -58,5 +71,21 @@ def test_space_is_consumed(qapp):
         ev = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier)
         dlg.keyPressEvent(ev)
         assert ev.isAccepted()
+    finally:
+        dlg._teardown()
+
+
+def test_configure_max_resolution_picks_highest_supported(qapp):
+    # The fake camera maxes at 1080p; the probe must select that, not the
+    # default VGA nor an unreachable 4K.
+    cap = _FakeCap()
+    chosen = cw.configure_max_resolution(cap)
+    assert chosen == (1920, 1080)
+
+
+def test_dialog_configures_resolution_on_open(qapp):
+    dlg = _dialog()
+    try:
+        assert dlg._resolution == (1920, 1080)
     finally:
         dlg._teardown()

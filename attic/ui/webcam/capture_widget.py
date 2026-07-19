@@ -31,6 +31,48 @@ from . import detect
 SHAPE_RECT = "rect"
 SHAPE_CIRCLE = "circle"
 
+# Common capture resolutions, highest first. The probe picks the highest one the
+# camera actually delivers.
+_CANDIDATE_RESOLUTIONS = [
+    (3840, 2160),  # 4K UHD
+    (2560, 1440),  # QHD
+    (1920, 1080),  # 1080p (typical HD webcam max)
+    (1600, 896),
+    (1280, 720),   # 720p
+    (1024, 576),
+    (640, 480),    # VGA fallback
+]
+
+
+def configure_max_resolution(cap) -> tuple[int, int] | None:
+    """Set ``cap`` to the highest resolution it actually delivers.
+
+    OpenCV opens cameras at 640x480 by default. Requesting a resolution the
+    camera doesn't support makes the driver clamp to a nearby mode, so we can't
+    trust the requested value — we probe candidates high-to-low and verify each
+    by grabbing a real frame, keeping the first that comes back at (close to) the
+    requested size. Also selects the MJPG codec, which most UVC webcams require
+    to reach their higher resolutions. Returns the chosen ``(width, height)`` or
+    None if nothing could be verified.
+    """
+    try:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    except Exception:  # noqa: BLE001 - not all backends accept a fourcc set
+        pass
+
+    for width, height in _CANDIDATE_RESOLUTIONS:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            fh, fw = frame.shape[:2]
+            # Accept if the delivered frame is at least ~90% of the request in
+            # both dimensions (the driver gave us this mode rather than clamping
+            # down to a smaller one).
+            if fw >= width * 0.9 and fh >= height * 0.9:
+                return (fw, fh)
+    return None
+
 
 class _ImageView(QLabel):
     """A QLabel that reports click-drag rectangles for manual cropping."""
@@ -88,6 +130,7 @@ class WebcamCaptureDialog(QDialog):
         self._frozen: np.ndarray | None = None  # frozen full frame
         self._cropped: np.ndarray | None = None  # crop being reviewed
         self._reviewing = False
+        self._resolution: tuple[int, int] | None = None  # chosen capture size
 
         self.view = _ImageView()
         self.view.on_manual_rect = self._apply_manual_rect
@@ -131,6 +174,10 @@ class WebcamCaptureDialog(QDialog):
         if not self._cap or not self._cap.isOpened():
             QTimer.singleShot(0, self._no_camera)
             return
+
+        # Photographs want detail, not framerate — capture at the camera's
+        # highest supported resolution rather than the 640x480 OpenCV default.
+        self._resolution = configure_max_resolution(self._cap)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
