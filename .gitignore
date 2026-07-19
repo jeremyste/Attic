@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Runtime staging created inside working folders (defensive; working folders
+# are normally chosen outside the repo)
+.tmp/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

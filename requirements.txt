@@ -1,0 +1,17 @@
+# Attic — runtime + test dependencies (install into a venv)
+#
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# System CLI tools are NOT pip-installable and must be present on PATH:
+#   ddrescue mtools parted sfdisk blkid file zstd sha256sum lsblk pkexec
+# (see README.md for the apt install line).
+
+PyQt6
+opencv-python
+pytest
+
+# Greaseweazle host tools (provides the `gw` command) — not published on PyPI,
+# installed straight from the upstream repo.
+greaseweazle @ git+https://github.com/keirf/greaseweazle@latest

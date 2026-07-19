@@ -1,0 +1,23 @@
+[project]
+name = "attic"
+version = "0.1.0"
+description = "Desktop app for archiving old media (floppy, optical, HDD) into compressed images + a CSV catalog"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6",
+    "opencv-python",
+    "greaseweazle @ git+https://github.com/keirf/greaseweazle@latest",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+attic = "main:main"
+
+[tool.setuptools]
+packages = ["attic", "attic.core", "attic.controllers", "attic.ui", "attic.ui.widgets", "attic.ui.webcam"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
