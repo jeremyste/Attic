@@ -104,6 +104,15 @@ class WebcamCaptureDialog(QDialog):
         self.accept_btn.setEnabled(False)
         self.retry_btn.setEnabled(False)
 
+        # The SPACE (freeze) / Enter (accept) / R (retry) shortcuts are handled by
+        # the dialog's keyPressEvent. Stop the buttons from stealing those keys:
+        # no button is a default (Enter) and none takes keyboard focus (Space),
+        # so they respond only to mouse clicks.
+        for btn in (self.retry_btn, self.skip_btn, self.accept_btn):
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.retry_btn)
         buttons.addStretch(1)
@@ -114,6 +123,9 @@ class WebcamCaptureDialog(QDialog):
         layout.addWidget(self.view, 1)
         layout.addWidget(self.hint)
         layout.addLayout(buttons)
+
+        # Ensure the dialog itself receives key events for the shortcuts.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._cap = cv2.VideoCapture(camera_index)
         if not self._cap or not self._cap.isOpened():
@@ -233,12 +245,20 @@ class WebcamCaptureDialog(QDialog):
 
     def keyPressEvent(self, ev) -> None:
         key = ev.key()
-        if key == Qt.Key.Key_Space and not self._reviewing:
-            self._freeze_and_crop()
+        if key == Qt.Key.Key_Space:
+            # Freeze in live mode; ignore (don't let it activate anything) in review.
+            if not self._reviewing:
+                self._freeze_and_crop()
+            ev.accept()
         elif key == Qt.Key.Key_R:
             self._back_to_live()
-        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.accept_btn.isEnabled():
-            self._accept_crop()
+            ev.accept()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter accepts only when a crop is ready; never falls through to the
+            # dialog's default button (which would otherwise skip/close).
+            if self.accept_btn.isEnabled():
+                self._accept_crop()
+            ev.accept()
         else:
             super().keyPressEvent(ev)
 
