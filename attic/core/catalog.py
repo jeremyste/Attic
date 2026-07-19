@@ -16,7 +16,7 @@ from typing import Iterable
 
 from .config import CATALOG_FILENAME
 
-# Exact column order of the catalog CSV (matches Task.md schema).
+# Exact column order of the catalog CSV (matches the spec schema).
 COLUMNS = [
     "timestamp",
     "media_type",

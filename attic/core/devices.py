@@ -1,6 +1,6 @@
 """Enumerate block devices for the HDD-tab dropdown source.
 
-HARD SAFETY REQUIREMENT (Task.md): by default only removable / USB-attached whole
+HARD SAFETY REQUIREMENT (the spec): by default only removable / USB-attached whole
 disks are offered, so a mis-click can never target the running OS disk. A device
 is *eligible* only if:
 

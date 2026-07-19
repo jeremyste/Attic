@@ -6,8 +6,6 @@ compressed disk images plus expanded file folders, tracked in a single CSV
 catalog. Three independent, concurrently-operable pipelines: **Floppy**, **HDD**,
 **Optical**.
 
-See `Task.md` for the original full specification.
-
 ## Highlights
 
 - **Three concurrent pipelines.** Floppy, HDD, and Optical each run in their own

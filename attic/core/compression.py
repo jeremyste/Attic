@@ -1,6 +1,6 @@
 """Compress a raw disk image with the ``zstd`` CLI, then checksum both files.
 
-Policy (Task.md): ``zstd -19 --long -T0``, run automatically as soon as a job's
+Policy (the spec): ``zstd -19 --long -T0``, run automatically as soon as a job's
 raw image is captured. SHA256 of both the raw and compressed images is recorded.
 The ddrescue/gw logfile is always kept uncompressed (never routed through here).
 """

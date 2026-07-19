@@ -1,6 +1,6 @@
 """HDD capture controllers.
 
-Two phases, because the multi-pass rescue is user-gated (Task.md: after each pass
+Two phases, because the multi-pass rescue is user-gated (the spec: after each pass
 show a summary and let the user choose "another pass" or "accept" — never
 auto-decide):
 

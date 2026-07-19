@@ -1,6 +1,6 @@
 """Webcam photo-capture dialog with live boundary overlay.
 
-Flow (Task.md): live preview with the detected boundary drawn in real time ->
+Flow (the spec): live preview with the detected boundary drawn in real time ->
 SPACE freezes the frame and applies the detected crop, showing the cropped result
 for review -> accept saves ``{name}_photo.jpg`` / 'R' returns to live. If auto
 detection clearly fails, the review step falls back to a manual click-and-drag

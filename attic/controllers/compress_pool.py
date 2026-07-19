@@ -1,6 +1,6 @@
 """Background finalize pool: compression, checksums, promotion, catalog append.
 
-Decoupled from capture (Task.md concurrency model): once a capture worker has a
+Decoupled from capture (the spec concurrency model): once a capture worker has a
 raw image staged, the expensive ``zstd`` pass + hashing is handed here so it runs
 on a shared ``QThreadPool`` without blocking the next capture on any pipeline.
 

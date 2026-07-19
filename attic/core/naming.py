@@ -1,6 +1,6 @@
 """Name resolution for an archived volume.
 
-Priority (Task.md step 4):
+Priority (the spec step 4):
     1. physical label entered by the user
     2. detected volume/partition label
     3. auto-generated fallback ``{prefix}_{NNN}_{date}``

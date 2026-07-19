@@ -6,7 +6,7 @@ mtools/blkid for floppies+HDD, the ISO9660 volume-id for optical). Do NOT assume
 FAT: these span DOS through Windows XP era, and one drive's partitions may differ
 from each other.
 
-Chain (Task.md):
+Chain (the spec):
     1. blkid (and mtools mlabel for FAT) — most reliable when it works
     2. ``file -s`` signature check against the raw image if inconclusive
     3. attempt a loopback mount with a short candidate list
