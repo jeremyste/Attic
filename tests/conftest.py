@@ -1,0 +1,100 @@
+"""Shared pytest fixtures.
+
+The core subprocess modules all funnel external commands through
+``attic.core.subprocess_util.run``. ``fake_run`` monkeypatches that single
+function so tests exercise the command-assembly and result-parsing logic without
+touching real devices/tools.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable
+
+import pytest
+
+from attic.core import subprocess_util
+from attic.core.subprocess_util import CmdResult
+
+
+@dataclass
+class _Rule:
+    matcher: Callable[[list[str]], bool]
+    result: CmdResult
+
+
+@dataclass
+class FakeRun:
+    """A programmable stand-in for ``subprocess_util.run``.
+
+    Register responses with :meth:`when` (substring or predicate) and inspect
+    what was invoked via :attr:`calls`. Unmatched commands return a benign
+    success by default, or raise if :attr:`strict` is set.
+    """
+
+    rules: list[_Rule] = field(default_factory=list)
+    calls: list[list[str]] = field(default_factory=list)
+    strict: bool = False
+    default_result: CmdResult | None = None
+
+    def when(self, needle, *, returncode=0, stdout="", stderr="", timed_out=False,
+             launch_error="", program: str | None = None):
+        """Register a canned result for commands matching ``needle``.
+
+        ``needle`` may be a substring (matched against the joined argv), a regex
+        pattern object, or a predicate ``list[str] -> bool``. ``program`` is a
+        convenience: match when argv[0] endswith the given program name.
+        """
+        if program is not None:
+            def matcher(argv, _p=program):
+                return bool(argv) and argv[0].split("/")[-1] == _p
+        elif callable(needle):
+            matcher = needle
+        elif hasattr(needle, "search"):
+            matcher = lambda argv, _n=needle: bool(_n.search(" ".join(argv)))
+        else:
+            matcher = lambda argv, _n=needle: _n in " ".join(argv)
+
+        def make(argv):
+            return CmdResult(
+                argv=list(argv), returncode=returncode, stdout=stdout,
+                stderr=stderr, timed_out=timed_out, launch_error=launch_error,
+            )
+
+        self.rules.append(_Rule(matcher, make))  # type: ignore[arg-type]
+        return self
+
+    def __call__(self, argv, *, input_text=None, timeout=None, check=False,
+                 cwd=None, env=None):
+        argv = [str(a) for a in argv]
+        self.calls.append(argv)
+        for rule in self.rules:
+            if rule.matcher(argv):
+                result = rule.result(argv) if callable(rule.result) else rule.result
+                if check and not result.ok:
+                    from attic.core.subprocess_util import CommandError
+                    raise CommandError(result)
+                return result
+        if self.strict:
+            raise AssertionError(f"unexpected command: {' '.join(argv)}")
+        result = self.default_result or CmdResult(argv=argv, returncode=0)
+        return result
+
+    # --- assertions helpers -------------------------------------------------
+
+    def ran(self, needle) -> bool:
+        return any(needle in " ".join(c) for c in self.calls)
+
+    def find(self, needle) -> list[str] | None:
+        for c in self.calls:
+            if needle in " ".join(c):
+                return c
+        return None
+
+
+@pytest.fixture
+def fake_run(monkeypatch):
+    """Patch ``subprocess_util.run`` everywhere it's referenced as ``su.run``."""
+    fake = FakeRun()
+    monkeypatch.setattr(subprocess_util, "run", fake)
+    return fake
