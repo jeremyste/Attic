@@ -1,17 +1,21 @@
-"""Enumerate block devices safe to image — the HDD-tab dropdown source.
+"""Enumerate block devices for the HDD-tab dropdown source.
 
-HARD SAFETY REQUIREMENT (Task.md): only removable / USB-attached whole disks may
-be offered. The system's own internal/boot drives must be filtered out entirely,
-so a mis-click can never target the running OS disk. A device qualifies only if:
+HARD SAFETY REQUIREMENT (Task.md): by default only removable / USB-attached whole
+disks are offered, so a mis-click can never target the running OS disk. A device
+is *eligible* only if:
 
   - it is a whole disk (``type == "disk"``), and
   - it is USB-attached (``tran == "usb"``) or flagged removable/hotplug, and
   - none of its partitions (or itself) is mounted at a system path
     (``/``, ``/boot``, ``/boot/efi``, ``/home``, or provides swap).
 
-The last check is belt-and-suspenders: even a USB disk currently hosting a system
-mount is excluded. Data comes from ``lsblk -J -O`` (JSON, all columns); parsing is
-split out so it is unit-testable against captured JSON without real hardware.
+Every disk is parsed and tagged (``removable`` / ``has_system_mount`` /
+``eligible``); the default listing keeps only eligible ones. An explicit override
+(``include_ineligible=True`` / :func:`list_all_devices`) also surfaces
+non-eligible disks — for the case where a genuine target drive in an enclosure
+mis-reports its transport as internal — so the UI can show them behind a warning
+rather than hiding them entirely. Data comes from ``lsblk -J -O`` (JSON, all
+columns); parsing is split out so it is unit-testable without real hardware.
 """
 
 from __future__ import annotations
@@ -32,12 +36,29 @@ class BlockDevice:
     model: str
     size: str  # human-readable, as lsblk reports (e.g. "465.8G")
     transport: str  # "usb", "sata", ...
+    removable: bool = True  # USB-attached or flagged removable/hotplug
+    has_system_mount: bool = False  # hosts /, /boot, /home, swap, ...
+
+    @property
+    def eligible(self) -> bool:
+        """Safe to offer by default (removable and not a live system disk)."""
+        return self.removable and not self.has_system_mount
+
+    @property
+    def warning(self) -> str:
+        """Why this device is not eligible, or '' when it is safe by default."""
+        if self.has_system_mount:
+            return "currently hosts a mounted system filesystem (likely this PC's own disk)"
+        if not self.removable:
+            return "does not report as removable/USB (may be an internal drive)"
+        return ""
 
     @property
     def label(self) -> str:
-        """Human-friendly dropdown label: model + size + path."""
+        """Human-friendly dropdown label: model + size + path, flagged if unsafe."""
         model = self.model.strip() or "Unknown model"
-        return f"{model} — {self.size} ({self.path})"
+        base = f"{model} — {self.size} ({self.path})"
+        return base if self.eligible else f"⚠ {base}"
 
 
 def _truthy(value) -> bool:
@@ -79,8 +100,13 @@ def _is_removable_or_usb(node: dict) -> bool:
     return _truthy(node.get("rm")) or _truthy(node.get("hotplug"))
 
 
-def parse_lsblk(json_text: str) -> list[BlockDevice]:
-    """Parse ``lsblk -J -O`` output into the list of eligible devices."""
+def parse_lsblk(json_text: str, *, include_ineligible: bool = False) -> list[BlockDevice]:
+    """Parse ``lsblk -J -O`` output into whole-disk devices.
+
+    By default only *eligible* (removable, non-system) disks are returned. With
+    ``include_ineligible=True`` every whole disk is returned, each tagged with its
+    ``removable``/``has_system_mount``/``eligible`` flags so the UI can warn.
+    """
     try:
         data = json.loads(json_text)
     except (json.JSONDecodeError, TypeError):
@@ -90,20 +116,18 @@ def parse_lsblk(json_text: str) -> list[BlockDevice]:
     for node in data.get("blockdevices", []) or []:
         if node.get("type") != "disk":
             continue
-        if not _is_removable_or_usb(node):
-            continue  # internal SATA/NVMe boot disk -> excluded
-        if _has_system_mount(node):
-            continue  # currently hosting a system mount -> excluded
         name = node.get("name", "")
-        devices.append(
-            BlockDevice(
-                name=name,
-                path=node.get("path") or f"/dev/{name}",
-                model=(node.get("model") or "").strip(),
-                size=node.get("size") or "",
-                transport=(node.get("tran") or "").lower(),
-            )
+        device = BlockDevice(
+            name=name,
+            path=node.get("path") or f"/dev/{name}",
+            model=(node.get("model") or "").strip(),
+            size=node.get("size") or "",
+            transport=(node.get("tran") or "").lower(),
+            removable=_is_removable_or_usb(node),
+            has_system_mount=_has_system_mount(node),
         )
+        if device.eligible or include_ineligible:
+            devices.append(device)
     return devices
 
 
@@ -113,3 +137,16 @@ def list_removable_devices(*, timeout: float | None = 10) -> list[BlockDevice]:
     if not result.ok:
         return []
     return parse_lsblk(result.stdout)
+
+
+def list_all_devices(*, timeout: float | None = 10) -> list[BlockDevice]:
+    """Run lsblk and return ALL whole disks, tagged (override; empty on error).
+
+    Used by the HDD tab's "show all drives" override for the case where a real
+    target drive in an enclosure mis-reports as internal. Non-eligible disks are
+    flagged so the UI surfaces the risk before any read.
+    """
+    result = su.run(["lsblk", "-J", "-O"], timeout=timeout)
+    if not result.ok:
+        return []
+    return parse_lsblk(result.stdout, include_ineligible=True)

@@ -12,6 +12,7 @@ internal/boot-disk filter).
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -50,6 +51,14 @@ class HddTab(PipelineTab):
         dev_row.addWidget(self.refresh_btn)
         self._layout.addLayout(dev_row)
 
+        # Safety override: by default only removable/USB disks are listed. Enable
+        # this only if a genuine target drive mis-reports as internal.
+        self.show_all_check = QCheckBox(
+            "Show all drives (advanced — includes internal/system disks)"
+        )
+        self.show_all_check.toggled.connect(self._on_show_all_toggled)
+        self._layout.addWidget(self.show_all_check)
+
         self.bar = RescueBar()
         self._layout.addWidget(QLabel("Rescue progress:"))
         self._layout.addWidget(self.bar)
@@ -60,8 +69,22 @@ class HddTab(PipelineTab):
 
     # --- device listing -----------------------------------------------------
 
+    def _on_show_all_toggled(self, checked: bool) -> None:
+        if checked:
+            QMessageBox.warning(
+                self, "Show all drives",
+                "You are enabling ALL drives, including this computer's own "
+                "internal and system disks.\n\nImaging the wrong drive can make "
+                "your system unbootable. Non-removable drives are marked with ⚠ "
+                "and require an extra confirmation.",
+            )
+        self.refresh_devices()
+
     def refresh_devices(self) -> None:
-        self._devices = devices.list_removable_devices()
+        if self.show_all_check.isChecked():
+            self._devices = devices.list_all_devices()
+        else:
+            self._devices = devices.list_removable_devices()
         self.device_combo.clear()
         for d in self._devices:
             self.device_combo.addItem(d.label, d)
@@ -83,13 +106,7 @@ class HddTab(PipelineTab):
         if outcome is None:
             return
 
-        confirm = QMessageBox.question(
-            self, "Confirm drive",
-            f"Image this drive?\n\n{device.model}\n{device.size}\n{device.path}\n\n"
-            "This reads the entire device. Make sure it is the correct one.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
+        if not self._confirm_device(device):
             return
 
         self._request = JobRequest(
@@ -109,6 +126,35 @@ class HddTab(PipelineTab):
         self.bar.clear()
         self.set_busy(True)
         self._start_pass(device.path, first_pass=True)
+
+    def _confirm_device(self, device: devices.BlockDevice) -> bool:
+        """Confirm the target drive, with an extra hard gate for unsafe drives."""
+        details = f"{device.model}\n{device.size}\n{device.path}"
+        if device.eligible:
+            reply = QMessageBox.question(
+                self, "Confirm drive",
+                f"Image this drive?\n\n{details}\n\n"
+                "This reads the entire device. Make sure it is the correct one.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            return reply == QMessageBox.StandardButton.Yes
+
+        # Non-eligible (internal / system-mounted) — surfaced only via the
+        # override. Require an explicit, deliberate second confirmation.
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("⚠ Unsafe drive selected")
+        box.setText(
+            f"This drive {device.warning}.\n\n{details}\n\n"
+            "Imaging the wrong drive can make this computer unbootable or read its "
+            "system disk. Only continue if you are certain this is an external "
+            "target drive that mis-reports itself.\n\nProceed anyway?"
+        )
+        proceed = box.addButton("Proceed anyway", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(box.buttons()[-1])
+        box.exec()
+        return box.clickedButton() is proceed
 
     def _start_pass(self, device_path: str, *, first_pass: bool) -> None:
         self.set_stage("Rescuing…")

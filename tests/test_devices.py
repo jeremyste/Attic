@@ -1,6 +1,10 @@
 import json
 
-from attic.core.devices import list_removable_devices, parse_lsblk
+from attic.core.devices import (
+    list_all_devices,
+    list_removable_devices,
+    parse_lsblk,
+)
 
 # Realistic lsblk -J -O snapshot: one NVMe boot disk, one internal SATA disk,
 # one USB target drive, and a USB stick currently hosting a system mount.
@@ -98,3 +102,33 @@ def test_list_removable_devices_uses_lsblk(fake_run):
 def test_list_removable_devices_empty_on_lsblk_failure(fake_run):
     fake_run.when("lsblk", returncode=1, stderr="boom")
     assert list_removable_devices() == []
+
+
+def test_include_ineligible_returns_all_tagged():
+    devs = parse_lsblk(SAMPLE, include_ineligible=True)
+    by_path = {d.path: d for d in devs}
+    # All four disks appear now.
+    assert set(by_path) == {"/dev/nvme0n1", "/dev/sda", "/dev/sdb", "/dev/sdc"}
+    # Only the USB non-system disk is eligible.
+    assert by_path["/dev/sdb"].eligible
+    # Internal + system-mounted ones are tagged, not eligible.
+    assert not by_path["/dev/nvme0n1"].eligible
+    assert not by_path["/dev/nvme0n1"].removable
+    assert by_path["/dev/sda"].has_system_mount  # /home
+    assert by_path["/dev/sdc"].has_system_mount  # USB stick mounted at /
+
+
+def test_ineligible_devices_carry_warning_and_flagged_label():
+    by_path = {d.path: d for d in parse_lsblk(SAMPLE, include_ineligible=True)}
+    assert by_path["/dev/nvme0n1"].warning
+    assert by_path["/dev/nvme0n1"].label.startswith("⚠")
+    # Eligible device has no warning and an unflagged label.
+    assert by_path["/dev/sdb"].warning == ""
+    assert not by_path["/dev/sdb"].label.startswith("⚠")
+
+
+def test_list_all_devices_uses_override(fake_run):
+    fake_run.when("lsblk", stdout=SAMPLE)
+    devs = list_all_devices()
+    assert len(devs) == 4
+    assert sum(1 for d in devs if d.eligible) == 1
