@@ -19,7 +19,7 @@ from datetime import datetime
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from ..core import catalog, staging
+from ..core import staging
 from ..core.catalog import CatalogRow
 from ..core.config import (
     COMPRESSED_IMAGE_SUFFIX,

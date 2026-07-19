@@ -135,7 +135,7 @@ class HddTab(PipelineTab):
         box.setWindowTitle("Rescue pass complete")
         box.setText(msg)
         again = box.addButton("Run another pass", QMessageBox.ButtonRole.AcceptRole)
-        accept = box.addButton("Accept and continue", QMessageBox.ButtonRole.RejectRole)
+        box.addButton("Accept and continue", QMessageBox.ButtonRole.RejectRole)
         box.exec()
         if box.clickedButton() is again:
             self._start_pass(device_path, first_pass=False)

@@ -2,7 +2,7 @@ import os
 
 from attic.core import catalog
 from attic.core.catalog import CatalogRow
-from attic.core.config import MediaType, TMP_DIRNAME
+from attic.core.config import TMP_DIRNAME
 from attic.ui.session import Session
 
 

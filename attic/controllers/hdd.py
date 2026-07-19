@@ -23,11 +23,10 @@ from dataclasses import dataclass, field
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..core import extract as extract_mod
-from ..core import fsdetect
 from ..core.catalog import CatalogRow
-from ..core.config import EXTRACTED_DIRNAME, FAT_FSTYPES, MediaType, Status, UNRECOGNIZED_FS_LABEL
+from ..core.config import EXTRACTED_DIRNAME, FAT_FSTYPES, Status, UNRECOGNIZED_FS_LABEL
 from ..core.datescan import scan_tree_date
-from ..core.ddrescue import MapSummary, build_ddrescue_argv
+from ..core.ddrescue import build_ddrescue_argv
 from ..core.partition import PartitionInfo, enumerate_partitions
 from ..core.sanitize import sanitize_filename
 from ..core.staging import StagingDir
