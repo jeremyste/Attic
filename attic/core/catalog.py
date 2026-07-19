@@ -136,6 +136,37 @@ def read_rows(working_folder: str) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
+def rename_item(
+    working_folder: str, media_type: str, old_name: str, new_name: str, *,
+    old_folder_path: str, new_folder_path: str,
+) -> int:
+    """Rewrite the catalog, renaming every row of one item. Thread-safe.
+
+    Matches rows by ``media_type`` + ``chosen_name == old_name`` (covers all
+    partition rows of a multi-partition drive) and updates their ``chosen_name``
+    and ``folder_path``. Returns the number of rows changed.
+    """
+    path = catalog_path(working_folder)
+    changed = 0
+    with _write_lock:
+        if not os.path.exists(path):
+            return 0
+        with open(path, newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        for row in rows:
+            if row.get("media_type") == media_type and row.get("chosen_name") == old_name:
+                row["chosen_name"] = new_name
+                if row.get("folder_path") == old_folder_path:
+                    row["folder_path"] = new_folder_path
+                changed += 1
+        if changed:
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=COLUMNS)
+                writer.writeheader()
+                writer.writerows(rows)
+    return changed
+
+
 def highest_sequence(working_folder: str, media_type: str) -> int:
     """Highest ``sequence_number`` recorded for ``media_type`` (0 if none).
 

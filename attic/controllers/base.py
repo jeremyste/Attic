@@ -53,6 +53,7 @@ class CaptureArtifacts:
     # Pipeline-specific detection/naming inputs the finalize step will use.
     detected_label: str = ""
     fallback_date: str = ""
+    fallback_date_suspect: bool = False
     filesystem_detected: str = ""
     status: Status = Status.OK
     error_summary: str = ""

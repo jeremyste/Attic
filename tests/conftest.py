@@ -98,3 +98,15 @@ def fake_run(monkeypatch):
     fake = FakeRun()
     monkeypatch.setattr(subprocess_util, "run", fake)
     return fake
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """A single offscreen QApplication for widget-touching tests."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app

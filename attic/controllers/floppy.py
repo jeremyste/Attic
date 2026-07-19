@@ -116,6 +116,7 @@ class FloppyCaptureWorker(CaptureWorker):
         det = fsdetect.detect_filesystem(image, mount_probe=extract_mod._mount_probe)
 
         fallback_date = ""
+        date_suspect = False
         if det.recognized:
             self.stage.emit("Extracting files")
             dest = staging.child(EXTRACTED_DIRNAME)
@@ -123,7 +124,9 @@ class FloppyCaptureWorker(CaptureWorker):
             if not result.ok:
                 self.log.emit(f"Extraction issue: {result.error_summary}")
                 status = Status.PARTIAL if status == Status.OK else status
-            fallback_date = scan_tree_date(dest).date_str
+            scan = scan_tree_date(dest)
+            fallback_date = scan.date_str
+            date_suspect = scan.suspect
         else:
             self.log.emit("Filesystem not recognized; keeping raw image only.")
             status = Status.UNRECOGNIZED_FS
@@ -133,6 +136,7 @@ class FloppyCaptureWorker(CaptureWorker):
             log_path=log_path,
             detected_label=det.label,
             fallback_date=fallback_date,
+            fallback_date_suspect=date_suspect,
             filesystem_detected=det.fstype,
             status=status,
         )
