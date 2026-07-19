@@ -1,12 +1,15 @@
 """HDD pipeline tab.
 
-Flow: physical-label prompt (whole drive) -> pick a device from the removable/USB
-dropdown -> confirmation dialog restating path/model/size -> Begin Capture ->
-first ddrescue pass -> summary with an explicit "Run another pass" / "Accept and
-continue" choice -> on accept, partition extraction -> naming + finalize.
+Default flow (photo-first, matching photo -> label -> dock -> select): capture
+front+back photos and the physical label for the whole drive -> dock the drive
+and pick it in the device-selection dialog -> confirmation restating
+path/model/size -> first ddrescue pass -> summary with an explicit "Run another
+pass" / "Accept and continue" choice -> on accept, partition extraction ->
+naming + finalize. A legacy device-first order is available via a setting.
 
-Only removable/USB whole disks are ever listed (core.devices enforces the hard
-internal/boot-disk filter).
+Only removable/USB whole disks are listed by default (core.devices enforces the
+hard internal/boot-disk filter); an explicit override can surface all disks
+behind warnings.
 """
 
 from __future__ import annotations
@@ -112,7 +115,7 @@ class HddTab(PipelineTab):
             media_type=MediaType.HDD,
             physical_label=outcome.physical_label,
             source_id=device.path,
-            photo_path=outcome.photo_path,
+            photos=outcome.photos,
         )
         self._staging = staging.create_staging(
             self._request.working_folder, MediaType.HDD, self._request.session_id

@@ -114,7 +114,7 @@ class AppContext:
                 chosen_name=chosen,
                 rows=[row],
                 log_path=artifacts.log_path,
-                photo_path=request.photo_path,
+                photos=request.photos,
             )
         )
 
@@ -168,7 +168,7 @@ class AppContext:
                 chosen_name=chosen,
                 rows=result.rows,
                 log_path=result.log_path,
-                photo_path=request.photo_path,
+                photos=request.photos,
             )
         )
 

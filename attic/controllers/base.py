@@ -40,7 +40,9 @@ class JobRequest:
     media_type: MediaType
     physical_label: str = ""
     source_id: str = ""  # device path, or "floppy"/"disc"
-    photo_path: str = ""  # webcam photo already captured to this temp path, if any
+    # webcam photos already captured, mapped {filename_suffix: temp_path}
+    # e.g. {"_photo_front.jpg": "/tmp/..", "_photo_back.jpg": "/tmp/.."}
+    photos: dict[str, str] = field(default_factory=dict)
     session_id: str = field(default_factory=staging.new_session_id)
 
 

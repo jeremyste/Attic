@@ -1,16 +1,19 @@
-"""Pre-capture physical-label prompt + optional webcam photo.
+"""Pre-capture physical-label prompt + optional webcam photo(s).
 
 Shown BEFORE the user inserts/loads media (a loaded drive's sticker can't be read
 by software, or by the user once it's inside a drive). For HDD this applies to the
-whole drive, not per partition. The webcam photo is captured here too (during the
-physical-label step, before "Begin Capture").
+whole drive, not per partition.
+
+Rectangular media (floppy, HDD) carry labels/part numbers on BOTH sides, so they
+get a front and a back photo; optical discs get a single photo. Each photo is
+captured with the webcam dialog during this step, before "Begin Capture".
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -22,18 +25,34 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..core.config import MediaType
+from ..core.config import (
+    MediaType,
+    PHOTO_BACK_SUFFIX,
+    PHOTO_FRONT_SUFFIX,
+    PHOTO_SUFFIX,
+)
 from .webcam.capture_widget import SHAPE_CIRCLE, SHAPE_RECT, WebcamCaptureDialog
 
 
 @dataclass
 class LabelOutcome:
     physical_label: str
-    photo_path: str  # temp path to a captured JPG, or "" if none
+    # captured photos mapped {filename_suffix: temp_path}
+    photos: dict[str, str] = field(default_factory=dict)
+
+
+def _photo_slots(media_type: MediaType) -> list[tuple[str, str]]:
+    """Return the (button caption, filename suffix) photo slots for a media type."""
+    if media_type == MediaType.OPTICAL:
+        return [("Take photo…", PHOTO_SUFFIX)]
+    return [
+        ("Take front photo…", PHOTO_FRONT_SUFFIX),
+        ("Take back photo…", PHOTO_BACK_SUFFIX),
+    ]
 
 
 class PhysicalLabelDialog(QDialog):
-    """Prompt for the physical label and optionally capture a photo."""
+    """Prompt for the physical label and optionally capture photo(s)."""
 
     def __init__(self, media_type: MediaType, parent=None, *,
                  camera_index: int = 0, skip_photo: bool = False):
@@ -42,21 +61,31 @@ class PhysicalLabelDialog(QDialog):
         self.camera_index = camera_index
         self.skip_photo = skip_photo
         self.setWindowTitle("Physical label")
-        self._photo_path = ""
+        self._photos: dict[str, str] = {}  # suffix -> temp path
 
         prompt = QLabel("Physical label (leave blank if none):")
         self.label_edit = QLineEdit()
 
-        self.photo_btn = QPushButton("Take photo…")
-        self.photo_btn.clicked.connect(self._take_photo)
-        self.photo_status = QLabel("No photo")
-        if skip_photo:
-            self.photo_btn.setEnabled(False)
-            self.photo_status.setText("Photos disabled in settings")
+        layout = QVBoxLayout(self)
+        layout.addWidget(prompt)
+        layout.addWidget(self.label_edit)
 
-        photo_row = QHBoxLayout()
-        photo_row.addWidget(self.photo_btn)
-        photo_row.addWidget(self.photo_status, 1)
+        # One row per photo slot (single for optical, front+back otherwise).
+        self._shape = SHAPE_CIRCLE if media_type == MediaType.OPTICAL else SHAPE_RECT
+        for caption, suffix in _photo_slots(media_type):
+            btn = QPushButton(caption)
+            status = QLabel("No photo")
+            if skip_photo:
+                btn.setEnabled(False)
+                status.setText("Photos disabled in settings")
+            else:
+                btn.clicked.connect(
+                    lambda _checked, s=suffix, st=status: self._take_photo(s, st)
+                )
+            row = QHBoxLayout()
+            row.addWidget(btn)
+            row.addWidget(status, 1)
+            layout.addLayout(row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -64,30 +93,23 @@ class PhysicalLabelDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Continue")
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(prompt)
-        layout.addWidget(self.label_edit)
-        layout.addLayout(photo_row)
         layout.addWidget(buttons)
 
-    def _take_photo(self) -> None:
-        # Circular media (optical) -> circle detection; rectangular otherwise.
-        shape = SHAPE_CIRCLE if self.media_type == MediaType.OPTICAL else SHAPE_RECT
+    def _take_photo(self, suffix: str, status: QLabel) -> None:
         fd, tmp_path = tempfile.mkstemp(prefix="attic-photo-", suffix=".jpg")
         os.close(fd)
         dlg = WebcamCaptureDialog(
-            tmp_path, shape=shape, camera_index=self.camera_index, parent=self
+            tmp_path, shape=self._shape, camera_index=self.camera_index, parent=self
         )
         dlg.exec()
         if dlg.result_path:
-            self._photo_path = dlg.result_path
-            self.photo_status.setText(f"Photo captured: {os.path.basename(dlg.result_path)}")
+            self._photos[suffix] = dlg.result_path
+            status.setText(f"Captured: {os.path.basename(dlg.result_path)}")
         else:
-            self.photo_status.setText("No photo")
+            status.setText("No photo")
 
     def outcome(self) -> LabelOutcome:
         return LabelOutcome(
             physical_label=self.label_edit.text().strip(),
-            photo_path=self._photo_path,
+            photos=dict(self._photos),
         )

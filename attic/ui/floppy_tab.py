@@ -46,7 +46,7 @@ class FloppyTab(PipelineTab):
             media_type=MediaType.FLOPPY,
             physical_label=outcome.physical_label,
             source_id="floppy",
-            photo_path=outcome.photo_path,
+            photos=outcome.photos,
         )
         worker = FloppyCaptureWorker(request)
         worker.stage.connect(self.set_stage)

@@ -49,7 +49,7 @@ class OpticalTab(PipelineTab):
             media_type=MediaType.OPTICAL,
             physical_label=outcome.physical_label,
             source_id=self.device_edit.text().strip() or "/dev/sr0",
-            photo_path=outcome.photo_path,
+            photos=outcome.photos,
         )
         worker = OpticalCaptureWorker(request, retries=self.context.settings.ddrescue_retries)
         worker.stage.connect(self.set_stage)

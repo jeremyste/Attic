@@ -27,7 +27,7 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
 from ..core import catalog, compression, staging
 from ..core.catalog import CatalogRow
-from ..core.config import MediaType, PHOTO_SUFFIX, Status
+from ..core.config import MediaType, Status
 from ..core.staging import StagingDir
 
 
@@ -42,7 +42,8 @@ class FinalizeRequest:
     chosen_name: str  # final top-level folder name for this item/drive
     rows: list[CatalogRow]  # one (single volume) or many (HDD partitions)
     log_path: str = ""  # staged ddrescue/gw logfile to rename to {chosen}.log
-    photo_path: str = ""  # temp webcam photo to copy in, if any
+    # webcam photos to copy in, mapped {filename_suffix: temp_path}
+    photos: dict[str, str] = field(default_factory=dict)
     keep_raw: bool = False  # normally False — only the compressed image is kept
     zstd_level: int = 19
     zstd_long: bool = True
@@ -79,11 +80,9 @@ class _FinalizeTask(QRunnable):
             if not req.keep_raw:
                 _remove_quiet(raw_path)
 
-            if req.photo_path and os.path.exists(req.photo_path):
-                shutil.copy2(
-                    req.photo_path,
-                    req.staging.child(f"{req.chosen_name}{PHOTO_SUFFIX}"),
-                )
+            for suffix, src in req.photos.items():
+                if src and os.path.exists(src):
+                    shutil.copy2(src, req.staging.child(f"{req.chosen_name}{suffix}"))
 
             final_dir = staging.final_dir(
                 req.working_folder, req.media_type, req.chosen_name

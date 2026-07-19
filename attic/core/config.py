@@ -58,7 +58,9 @@ EXTRACTED_DIRNAME = "Extracted Files"
 RAW_IMAGE_SUFFIX = ".img"
 COMPRESSED_IMAGE_SUFFIX = ".img.zst"
 LOG_SUFFIX = ".log"
-PHOTO_SUFFIX = "_photo.jpg"
+PHOTO_SUFFIX = "_photo.jpg"  # single-photo media (optical)
+PHOTO_FRONT_SUFFIX = "_photo_front.jpg"  # two-sided media (floppy, HDD)
+PHOTO_BACK_SUFFIX = "_photo_back.jpg"
 
 
 # --- Compression -----------------------------------------------------------
