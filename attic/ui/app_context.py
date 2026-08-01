@@ -111,6 +111,7 @@ class AppContext:
                 media_type=request.media_type,
                 staging=staging,
                 raw_image_path=artifacts.raw_image_path,
+                flux_path=artifacts.flux_path,
                 chosen_name=chosen,
                 rows=[row],
                 log_path=artifacts.log_path,

@@ -83,7 +83,8 @@ Everything for the session goes into that one folder.
   catalog.csv              # the single catalog, one row per volume/partition
   attic_settings.json      # per-folder settings (travels with the archive)
   Floppy/<name>/
-      <name>.img.zst       # compressed raw image
+      <name>.img.zst       # compressed sector image, decoded from the flux
+      <name>.scp.zst       # compressed flux master (fall-back; see below)
       <name>.log           # gw logfile (kept uncompressed)
       <name>_photo_front.jpg
       <name>_photo_back.jpg
@@ -118,6 +119,33 @@ Each pipeline follows the same shape:
    SHA-256 run in a background pool, then the job is atomically moved into place
    and a catalog row is written.
 
+### Floppy flux capture
+
+By default the floppy pipeline reads the **raw flux** off the disk
+(`gw read --raw`), then decodes the sector image from that flux host-side
+(`gw convert`) rather than letting gw decode during the read. A finished disk
+therefore keeps three layers, most to least convenient:
+
+1. `Extracted Files/` - browse immediately, no tools needed.
+2. `<name>.img.zst` - the sector image, for mounting or emulators.
+3. `<name>.scp.zst` - the flux master, to re-decode years from now (with better
+   tools, or a different format guess) *without* putting fragile media back in
+   a drive.
+
+Two practical consequences:
+
+- **The drive is only needed for step one.** Decode, extraction and compression
+  are pure host work, so the disk can be ejected and the next one loaded while
+  the pipeline is still chewing on the last.
+- **A disk that decodes to nothing still archives.** If `gw convert` produces no
+  image, the flux is kept on its own and the row is marked `unrecognized_fs`;
+  that case is exactly what the flux copy exists for.
+
+Cost is roughly **10-15 MB compressed per 1.44M disk** (about 40x the sector
+image), and it is near-constant per disk - flux size tracks transition count,
+not how much data the disk holds, so a blank disk costs full price. Turn it off
+with the *Preserve flux* setting to read straight to a sector image instead.
+
 ### Naming
 
 Name priority is: **physical label entered -> detected volume/partition label ->
@@ -145,6 +173,10 @@ working folder** (so they travel with the archive):
 | Optical device | Default `/dev/srN` |
 | ddrescue retries | Rescue aggressiveness |
 | Floppy cylinders / heads | Track-grid geometry (e.g. 40-track, single-sided) |
+| Floppy disk format | `gw --format` value. Default `ibm.scan` probes the IBM FM/MFM variants per track, covering 160K-1.44M DOS-era disks; set explicitly for other media (`amiga.amigados`, `atarist.720`, ...). `gw read --help` lists them all |
+| Greaseweazle port | Serial port override; blank (default) lets `gw` auto-detect |
+| Preserve flux | On by default. Archive a `.scp` flux master and decode the image from it; see [Floppy flux capture](#floppy-flux-capture) |
+| Flux revolutions | Revolutions per track for the flux read. "format default" (2 for `ibm.scan`) unless raised; each extra revolution adds ~50% to the flux size but gives a damaged track another independent sample |
 | Camera index / skip photo | Webcam selection; disable photo prompts |
 | Auto-accept generated names | Skip Pending Labels for unlabeled volumes |
 | HDD photo-before-dock | Photograph & label before selecting the drive |
@@ -178,10 +210,19 @@ QT_QPA_PLATFORM=offscreen pytest
 
 - The non-GUI core is thoroughly unit-tested; the full app constructs and the
   finalize path is verified end-to-end with real `zstd`/`sha256sum`.
-- The actual capture steps (`gw read`, `ddrescue` against real devices, live
-  webcam) require hardware and have not been exercised here; verify against your
-  own rig on first use. Tool flags for `gw`/`ddrescue` are kept conservative and
-  cross-version-safe; check them against your installed versions.
+- The `gw` invocation has been exercised against a real Greaseweazle V4.1 (host
+  tools 1.23, firmware 1.6) with an empty drive: the command is accepted, reaches
+  the drive, and the no-disk condition is correctly reported as a failed capture.
+- The flux decode chain (`gw convert` -> detect -> extract -> compress -> catalog)
+  is verified end-to-end against a real 57 MB flux stream, with only the drive
+  read itself stubbed. What remains unverified on hardware is the read stage:
+  `gw read --raw` against a physical disk, and the live track grid it feeds.
+- `ddrescue` against real devices and the live webcam path require hardware and
+  have not been exercised here; verify against your own rig on first use.
+- Note that `gw read` exits 0 even when the read fails at the device level (it
+  catches the error, prints `Command Failed: ...`, and writes no image). The
+  floppy controller therefore checks gw's output and the resulting file rather
+  than trusting the exit status.
 - Per-partition HDD folders are auto-named from detected labels; there is no
   interactive per-partition naming dialog yet.
 

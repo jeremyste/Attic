@@ -38,6 +38,13 @@ COLUMNS = [
     "error_summary",
     "status",
     "notes",
+    # Preserved flux master (floppy pipeline). Appended after the original
+    # columns so a catalog written by an earlier version still parses.
+    "flux_filename",
+    "flux_raw_size_bytes",
+    "flux_compressed_size_bytes",
+    "sha256_flux_raw",
+    "sha256_flux_compressed",
 ]
 
 # Serializes all appends across threads/pipelines within a process.
@@ -68,6 +75,11 @@ class CatalogRow:
     error_summary: str = ""
     status: str = ""
     notes: str = ""
+    flux_filename: str = ""
+    flux_raw_size_bytes: str = ""
+    flux_compressed_size_bytes: str = ""
+    sha256_flux_raw: str = ""
+    sha256_flux_compressed: str = ""
 
     def as_ordered(self) -> dict[str, str]:
         d = asdict(self)
@@ -107,6 +119,32 @@ def append_row(working_folder: str, row: CatalogRow) -> None:
     append_rows(working_folder, [row])
 
 
+def _upgrade_header(path: str) -> None:
+    """Widen a catalog written by an older version to the current columns.
+
+    Columns are only ever appended, so an older file's header is a prefix of
+    :data:`COLUMNS`. Without this, appending a row with the newer fields would
+    write values past the end of the header, where they are unreachable by name.
+    A header we do not recognize (hand-edited, or from a newer version) is left
+    strictly alone -- rewriting it could only lose data.
+    """
+    with open(path, newline="", encoding="utf-8") as fh:
+        header = next(csv.reader(fh), None)
+    if header is None or header == COLUMNS:
+        return
+    if header != COLUMNS[: len(header)]:
+        return
+    with open(path, newline="", encoding="utf-8") as fh:
+        existing = list(csv.DictReader(fh))
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=COLUMNS)
+        writer.writeheader()
+        for row in existing:
+            writer.writerow({col: row.get(col, "") or "" for col in COLUMNS})
+    os.replace(tmp, path)
+
+
 def append_rows(working_folder: str, rows: Iterable[CatalogRow]) -> None:
     """Append multiple rows atomically w.r.t. other appends. Thread-safe.
 
@@ -118,6 +156,8 @@ def append_rows(working_folder: str, rows: Iterable[CatalogRow]) -> None:
     path = catalog_path(working_folder)
     with _write_lock:
         exists = os.path.exists(path)
+        if exists:
+            _upgrade_header(path)
         os.makedirs(working_folder, exist_ok=True)
         with open(path, "a", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=COLUMNS)

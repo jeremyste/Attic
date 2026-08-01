@@ -6,21 +6,31 @@ a per-track signal so the cylinder×head grid widget can update live. After the
 read we run the shared filesystem-detection chain (don't assume FAT12 — these
 disks span DOS through Windows XP era) and extract if recognized.
 
-gw flag syntax varies by version; ``gw read <image>`` is the stable core. Callers
-should verify the installed gw's ``--help`` for anything version-specific.
+Two things about gw are load-bearing here and were verified against a real
+Greaseweazle V4.1 (host tools 1.23, firmware 1.6):
+
+* Writing a *sector* image (.img) is refused outright unless ``--format`` is
+  given ("Sector image requires a disk format to be specified"), so the format
+  is always passed. Only a raw flux image (.scp/.raw) may omit it.
+* ``gw read`` swallows device-level failures: it catches ``USB.CmdError``,
+  prints ``Command Failed: ...``, and still **exits 0** while writing no image
+  at all (e.g. no disk in the drive -> "GetFluxStatus: No Index"). The exit
+  status alone therefore cannot be trusted; we also scan the output for gw's
+  error markers and require a non-empty image on disk.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PyQt6.QtCore import pyqtSignal
 
 from ..core import extract as extract_mod
 from ..core import fsdetect
-from ..core.config import EXTRACTED_DIRNAME, Status
+from ..core.config import EXTRACTED_DIRNAME, UNRECOGNIZED_FS_LABEL, Status
 from ..core.datescan import scan_tree_date
 from ..core.staging import StagingDir
 from .base import CaptureArtifacts, CaptureWorker
@@ -30,12 +40,22 @@ TRACK_CLEAN = "clean"
 TRACK_RETRIED = "retried"
 TRACK_FAILED = "failed"
 
-# e.g. "T0.0: IBM MFM (18/18 sectors)"  /  "T12.1: ... (17/18 sectors)"
+# e.g. "T0.0: IBM MFM (18/18 sectors) from 250kbps, 300rpm"
+# When the logical track differs from the physical one (step=/hswap/head offsets)
+# gw inserts a remap before the colon: "T40.0 <- Drive 20.0: IBM MFM (9/9 ...)".
+# The cyl/head we want is the logical one, i.e. the first pair.
 _TRACK_RE = re.compile(
-    r"T(?P<cyl>\d+)\.(?P<head>\d+):.*?\((?P<got>\d+)/(?P<total>\d+)\s+sectors?\)",
+    r"T(?P<cyl>\d+)\.(?P<head>\d+)(?:\s*<-[^:]*)?:"
+    r".*?\((?P<got>\d+)/(?P<total>\d+)\s+sectors?\)",
     re.IGNORECASE,
 )
 _RETRY_RE = re.compile(r"retry|retrying", re.IGNORECASE)
+
+# gw's two error markers. "** FATAL ERROR:" is printed by the CLI wrapper with
+# the message on the following line(s); "Command Failed:" carries its message
+# inline and, unlike the fatal path, still exits 0.
+_FATAL_MARKER = "** FATAL ERROR:"
+_CMD_FAILED_MARKER = "Command Failed:"
 
 
 @dataclass
@@ -45,6 +65,74 @@ class TrackResult:
     status: str  # TRACK_CLEAN / TRACK_RETRIED / TRACK_FAILED
     sectors_got: int = 0
     sectors_total: int = 0
+
+
+@dataclass
+class _GwRun:
+    """Outcome of one streamed gw invocation."""
+
+    # Keyed by (cyl, head): gw prints a line per retry of the same track, so
+    # counting lines would multiply-count one bad track.
+    tracks: dict[tuple[int, int], str] = field(default_factory=dict)
+    error: str = ""  # first hard error gw reported, if any
+    returncode: int = 0
+    cancelled: bool = False
+
+    @property
+    def failed_tracks(self) -> int:
+        return sum(1 for s in self.tracks.values() if s == TRACK_FAILED)
+
+
+def _nonempty(path: str) -> bool:
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def build_gw_read_cmd(
+    out_path: str, *, disk_format: str = "ibm.scan", device: str = "",
+    raw: bool = False, revs: int = 0,
+) -> list[str]:
+    """Build the ``gw read`` argv.
+
+    ``disk_format`` is mandatory for a sector image; an empty value would make
+    gw abort before touching the drive, so we fall back to the scanning format
+    rather than emit a command that cannot work. ``device`` is omitted when
+    blank so gw auto-detects the port.
+
+    ``raw`` writes the preserved flux stream. It is required for a real flux
+    master: writing a .scp *without* it makes gw re-synthesize flux from the
+    decoded sectors, which throws away exactly the information the flux copy
+    exists to keep. ``--format`` is still passed alongside ``--raw`` (where it
+    "verifies only"), because that is what makes gw decode and report each
+    track's sector counts as it goes -- without it the per-track output carries
+    no sector totals and the live track grid has nothing to show.
+
+    ``revs`` of 0 leaves gw on the format's own default (2 for ibm.scan).
+    """
+    cmd = ["gw", "read", "--format", disk_format.strip() or "ibm.scan"]
+    if raw:
+        cmd.append("--raw")
+    if revs > 0:
+        cmd += ["--revs", str(revs)]
+    if device.strip():
+        cmd += ["--device", device.strip()]
+    cmd.append(out_path)
+    return cmd
+
+
+def build_gw_convert_cmd(
+    flux_path: str, image: str, *, disk_format: str = "ibm.scan"
+) -> list[str]:
+    """Build the ``gw convert`` argv that decodes a flux stream to a sector image.
+
+    Pure host-side work: the drive is already free by the time this runs.
+    """
+    return [
+        "gw", "convert", "--format", disk_format.strip() or "ibm.scan",
+        flux_path, image,
+    ]
 
 
 def parse_gw_track_line(line: str) -> TrackResult | None:
@@ -75,43 +163,168 @@ class FloppyCaptureWorker(CaptureWorker):
 
     track_read = pyqtSignal(object)  # TrackResult
 
-    def capture(self, staging: StagingDir) -> CaptureArtifacts:
-        image = staging.child("floppy.img")
-        log_path = staging.child("floppy.log")
+    def __init__(self, request, parent=None, *, disk_format: str = "ibm.scan",
+                 device: str = "", capture_flux: bool = True, flux_revs: int = 0):
+        super().__init__(request, parent)
+        self.disk_format = disk_format
+        self.device = device
+        self.capture_flux = capture_flux
+        self.flux_revs = flux_revs
 
-        self.stage.emit("Reading floppy")
-        self.log.emit(f"gw read -> {image}")
+    # --- gw process plumbing -------------------------------------------------
 
-        any_track = False
-        failed_tracks = 0
-        with open(log_path, "w", encoding="utf-8", errors="replace") as logfh:
-            proc = subprocess.Popen(
-                ["gw", "read", image],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                logfh.write(line)
-                self.log.emit(line.rstrip())
+    def _run_gw(self, cmd: list[str], logfh, *, watch_tracks: bool) -> _GwRun:
+        """Run one gw command, streaming its output to the log and the UI.
+
+        Returns what the run produced: per-track outcomes (when
+        ``watch_tracks``), the first hard error gw reported, and whether the
+        user interrupted it.
+        """
+        self.log.emit(" ".join(cmd))
+        run = _GwRun()
+        awaiting_fatal_text = False
+
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            logfh.write(line)
+            self.log.emit(line.rstrip())
+
+            stripped = line.strip()
+            if awaiting_fatal_text:
+                # The CLI prints the marker, then the dedented message body.
+                if stripped:
+                    run.error = run.error or stripped
+                    awaiting_fatal_text = False
+            elif stripped.startswith(_FATAL_MARKER):
+                awaiting_fatal_text = True
+            elif stripped.startswith(_CMD_FAILED_MARKER) and not run.error:
+                run.error = stripped
+
+            if watch_tracks:
                 tr = parse_gw_track_line(line)
                 if tr:
-                    any_track = True
-                    if tr.status == TRACK_FAILED:
-                        failed_tracks += 1
+                    run.tracks[(tr.cyl, tr.head)] = tr.status
                     self.track_read.emit(tr)
-                if self.isInterruptionRequested():
-                    proc.terminate()
-                    break
-            proc.wait()
+            if self.isInterruptionRequested():
+                run.cancelled = True
+                proc.terminate()
+                break
+        proc.wait()
+        run.returncode = proc.returncode
+        return run
 
-        if proc.returncode != 0 and not any_track:
+    # --- capture modes -------------------------------------------------------
+
+    def capture(self, staging: StagingDir) -> CaptureArtifacts:
+        log_path = staging.child("floppy.log")
+        with open(log_path, "w", encoding="utf-8", errors="replace") as logfh:
+            if self.capture_flux:
+                return self._capture_via_flux(staging, log_path, logfh)
+            return self._capture_direct(staging, log_path, logfh)
+
+    def _capture_via_flux(
+        self, staging: StagingDir, log_path: str, logfh
+    ) -> CaptureArtifacts:
+        """Preserve flux first, then decode it to a sector image host-side.
+
+        The drive is only needed for step one, so the disk can be swapped as
+        soon as the read finishes; decode and extraction are pure host work.
+        """
+        flux = staging.child("floppy.scp")
+        image = staging.child("floppy.img")
+
+        self.stage.emit("Reading floppy (flux)")
+        read = self._run_gw(
+            build_gw_read_cmd(
+                flux, disk_format=self.disk_format, device=self.device,
+                raw=True, revs=self.flux_revs,
+            ),
+            logfh, watch_tracks=True,
+        )
+
+        if read.cancelled:
             return CaptureArtifacts(
-                raw_image_path=image, log_path=log_path, status=Status.FAILED,
-                error_summary="gw read failed (see log)",
+                raw_image_path="", flux_path=flux, log_path=log_path,
+                status=Status.FAILED,
+                error_summary="Cancelled before the read finished",
+            )
+        if not _nonempty(flux):
+            return CaptureArtifacts(
+                raw_image_path="", flux_path="", log_path=log_path,
+                status=Status.FAILED,
+                error_summary=read.error or "gw read failed (see log)",
             )
 
-        status = Status.PARTIAL if failed_tracks else Status.OK
+        status = Status.PARTIAL if read.failed_tracks else Status.OK
+        if read.error or read.returncode != 0:
+            self.log.emit(f"gw reported an error; flux kept as partial: {read.error}")
+            status = Status.PARTIAL
 
+        # Decode host-side. A flux stream that yields no image is still worth
+        # archiving -- that is precisely the case the flux master exists for.
+        self.stage.emit("Decoding flux to sector image")
+        convert = self._run_gw(
+            build_gw_convert_cmd(flux, image, disk_format=self.disk_format),
+            logfh, watch_tracks=False,
+        )
+        if not _nonempty(image):
+            self.log.emit(
+                "Flux did not decode to a sector image; archiving the flux alone."
+            )
+            return CaptureArtifacts(
+                raw_image_path="", flux_path=flux, log_path=log_path,
+                filesystem_detected=UNRECOGNIZED_FS_LABEL,
+                status=Status.UNRECOGNIZED_FS,
+                error_summary=convert.error,
+            )
+
+        return self._detect_and_extract(
+            staging, image, log_path, status, flux_path=flux
+        )
+
+    def _capture_direct(
+        self, staging: StagingDir, log_path: str, logfh
+    ) -> CaptureArtifacts:
+        """Read straight to a sector image, keeping no flux."""
+        image = staging.child("floppy.img")
+
+        self.stage.emit("Reading floppy")
+        read = self._run_gw(
+            build_gw_read_cmd(
+                image, disk_format=self.disk_format, device=self.device
+            ),
+            logfh, watch_tracks=True,
+        )
+
+        # gw writes the image only once the read completes, so a missing or
+        # empty file means nothing usable was captured -- regardless of exit code.
+        if read.cancelled:
+            return CaptureArtifacts(
+                raw_image_path=image, log_path=log_path, status=Status.FAILED,
+                error_summary="Cancelled before the read finished",
+            )
+        if not _nonempty(image) or (read.error and not read.tracks):
+            return CaptureArtifacts(
+                raw_image_path=image, log_path=log_path, status=Status.FAILED,
+                error_summary=read.error or "gw read failed (see log)",
+            )
+
+        status = Status.PARTIAL if read.failed_tracks else Status.OK
+        if read.error or read.returncode != 0:
+            # An image exists but gw also reported trouble: keep what we got and
+            # flag it rather than presenting a truncated read as a clean one.
+            self.log.emit(f"gw reported an error; image kept as partial: {read.error}")
+            status = Status.PARTIAL
+
+        return self._detect_and_extract(staging, image, log_path, status)
+
+    def _detect_and_extract(
+        self, staging: StagingDir, image: str, log_path: str,
+        status: Status, *, flux_path: str = "",
+    ) -> CaptureArtifacts:
         self.stage.emit("Detecting filesystem")
         det = fsdetect.detect_filesystem(image, mount_probe=extract_mod._mount_probe)
 
@@ -133,6 +346,7 @@ class FloppyCaptureWorker(CaptureWorker):
 
         return CaptureArtifacts(
             raw_image_path=image,
+            flux_path=flux_path,
             log_path=log_path,
             detected_label=det.label,
             fallback_date=fallback_date,

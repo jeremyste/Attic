@@ -59,9 +59,33 @@ class SettingsDialog(QDialog):
         self.heads = QSpinBox()
         self.heads.setRange(1, 2)
         self.heads.setValue(settings.floppy_heads)
+        self.floppy_format = QLineEdit(settings.floppy_format)
+        self.floppy_format.setToolTip(
+            "gw disk format. 'ibm.scan' probes the IBM FM/MFM variants per track "
+            "and suits DOS-era disks; run 'gw read --help' for the full list."
+        )
+        self.floppy_device = QLineEdit(settings.floppy_device)
+        self.floppy_device.setPlaceholderText("auto-detect")
         flop = QFormLayout()
         flop.addRow("Floppy cylinders:", self.cyls)
         flop.addRow("Floppy heads:", self.heads)
+        self.capture_flux = QCheckBox(
+            "Preserve flux (.scp) and decode the image from it"
+        )
+        self.capture_flux.setChecked(settings.floppy_capture_flux)
+        self.capture_flux.setToolTip(
+            "Archives a re-decodable master alongside the image, at roughly "
+            "10-15 MB compressed per disk. Also frees the drive sooner: only the "
+            "flux read needs the hardware."
+        )
+        self.flux_revs = QSpinBox()
+        self.flux_revs.setRange(0, 10)
+        self.flux_revs.setSpecialValueText("format default")
+        self.flux_revs.setValue(settings.floppy_flux_revs)
+        flop.addRow("Disk format:", self.floppy_format)
+        flop.addRow("Greaseweazle port:", self.floppy_device)
+        flop.addRow(self.capture_flux)
+        flop.addRow("Flux revolutions:", self.flux_revs)
 
         # Webcam
         self.camera = QSpinBox()
@@ -113,6 +137,10 @@ class SettingsDialog(QDialog):
             ddrescue_retries=self.retries.value(),
             floppy_cylinders=self.cyls.value(),
             floppy_heads=self.heads.value(),
+            floppy_format=self.floppy_format.text().strip() or "ibm.scan",
+            floppy_device=self.floppy_device.text().strip(),
+            floppy_capture_flux=self.capture_flux.isChecked(),
+            floppy_flux_revs=self.flux_revs.value(),
             camera_index=self.camera.value(),
             skip_photo=self.skip_photo.isChecked(),
             auto_accept_fallback_names=self.auto_accept.isChecked(),

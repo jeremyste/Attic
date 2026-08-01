@@ -50,7 +50,11 @@ class JobRequest:
 class CaptureArtifacts:
     """What a pipeline's capture step produced inside its staging dir."""
 
+    # May be "" when a flux capture decoded to nothing (the flux is still kept).
     raw_image_path: str
+    # Preserved flux stream (.scp), when the pipeline captured one. Archived
+    # compressed alongside the image as the fall-back master.
+    flux_path: str = ""
     log_path: str = ""
     # Pipeline-specific detection/naming inputs the finalize step will use.
     detected_label: str = ""

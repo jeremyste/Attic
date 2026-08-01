@@ -48,7 +48,13 @@ class FloppyTab(PipelineTab):
             source_id="floppy",
             photos=outcome.photos,
         )
-        worker = FloppyCaptureWorker(request)
+        worker = FloppyCaptureWorker(
+            request,
+            disk_format=s.floppy_format,
+            device=s.floppy_device,
+            capture_flux=s.floppy_capture_flux,
+            flux_revs=s.floppy_flux_revs,
+        )
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
         worker.track_read.connect(lambda tr: self.grid.set_track(tr.cyl, tr.head, tr.status))

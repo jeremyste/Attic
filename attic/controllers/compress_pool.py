@@ -38,9 +38,13 @@ class FinalizeRequest:
     working_folder: str
     media_type: MediaType
     staging: StagingDir
-    raw_image_path: str  # inside staging (any working name)
+    raw_image_path: str  # inside staging (any working name); "" if none decoded
     chosen_name: str  # final top-level folder name for this item/drive
     rows: list[CatalogRow]  # one (single volume) or many (HDD partitions)
+    # Preserved flux stream to archive alongside the image. Always compressed and
+    # the uncompressed copy always dropped -- it is ~40x the image and the .zst
+    # is what gets kept, so retaining both would dwarf the archive.
+    flux_path: str = ""
     log_path: str = ""  # staged ddrescue/gw logfile to rename to {chosen}.log
     # webcam photos to copy in, mapped {filename_suffix: temp_path}
     photos: dict[str, str] = field(default_factory=dict)
@@ -65,20 +69,37 @@ class _FinalizeTask(QRunnable):
         req = self.req
         try:
             # Rename staged artifacts to the resolved {chosen_name} before work.
-            raw_path = _rename_to(
-                req.raw_image_path, req.staging.child(f"{req.chosen_name}.img")
-            )
             if req.log_path and os.path.exists(req.log_path):
                 _rename_to(req.log_path, req.staging.child(f"{req.chosen_name}.log"))
 
-            out_path = req.staging.child(f"{req.chosen_name}.img.zst")
-            self.signals.progress.emit(req.chosen_name, "Compressing")
-            result = compression.compress_and_checksum(
-                raw_path, out_path, level=req.zstd_level, long_mode=req.zstd_long,
-            )
+            result = None
+            raw_path = ""
+            if req.raw_image_path and os.path.exists(req.raw_image_path):
+                raw_path = _rename_to(
+                    req.raw_image_path, req.staging.child(f"{req.chosen_name}.img")
+                )
+                out_path = req.staging.child(f"{req.chosen_name}.img.zst")
+                self.signals.progress.emit(req.chosen_name, "Compressing image")
+                result = compression.compress_and_checksum(
+                    raw_path, out_path, level=req.zstd_level, long_mode=req.zstd_long,
+                )
+                if not req.keep_raw:
+                    _remove_quiet(raw_path)
 
-            if not req.keep_raw:
-                _remove_quiet(raw_path)
+            flux_result = None
+            if req.flux_path and os.path.exists(req.flux_path):
+                flux_raw = _rename_to(
+                    req.flux_path, req.staging.child(f"{req.chosen_name}.scp")
+                )
+                self.signals.progress.emit(req.chosen_name, "Compressing flux")
+                flux_result = compression.compress_and_checksum(
+                    flux_raw, req.staging.child(f"{req.chosen_name}.scp.zst"),
+                    level=req.zstd_level, long_mode=req.zstd_long,
+                )
+                _remove_quiet(flux_raw)
+
+            if result is None and flux_result is None:
+                raise RuntimeError("nothing to archive: no image and no flux")
 
             for suffix, src in req.photos.items():
                 if src and os.path.exists(src):
@@ -89,16 +110,29 @@ class _FinalizeTask(QRunnable):
             )
             rel_folder = os.path.relpath(final_dir, req.working_folder)
 
-            comp_name = os.path.basename(result.compressed_path)
-            raw_name = os.path.basename(raw_path)
             for row in req.rows:
                 row.folder_path = rel_folder
-                row.raw_image_filename = "" if not req.keep_raw else raw_name
-                row.compressed_image_filename = comp_name
-                row.raw_size_bytes = str(result.raw_size_bytes)
-                row.compressed_size_bytes = str(result.compressed_size_bytes)
-                row.sha256_raw = result.sha256_raw
-                row.sha256_compressed = result.sha256_compressed
+                if result is not None:
+                    row.raw_image_filename = (
+                        os.path.basename(raw_path) if req.keep_raw else ""
+                    )
+                    row.compressed_image_filename = os.path.basename(
+                        result.compressed_path
+                    )
+                    row.raw_size_bytes = str(result.raw_size_bytes)
+                    row.compressed_size_bytes = str(result.compressed_size_bytes)
+                    row.sha256_raw = result.sha256_raw
+                    row.sha256_compressed = result.sha256_compressed
+                if flux_result is not None:
+                    # sha256_flux_raw is the hash of the *decompressed* stream --
+                    # what you verify against after unpacking the .zst later.
+                    row.flux_filename = os.path.basename(flux_result.compressed_path)
+                    row.flux_raw_size_bytes = str(flux_result.raw_size_bytes)
+                    row.flux_compressed_size_bytes = str(
+                        flux_result.compressed_size_bytes
+                    )
+                    row.sha256_flux_raw = flux_result.sha256_raw
+                    row.sha256_flux_compressed = flux_result.sha256_compressed
 
             self.signals.progress.emit(req.chosen_name, "Finalizing")
             staging.promote(req.staging, final_dir)

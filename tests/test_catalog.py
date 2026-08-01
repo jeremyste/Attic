@@ -105,3 +105,49 @@ def test_concurrent_appends_are_serialized(tmp_path):
     rows = read_rows(str(tmp_path))
     assert len(rows) == 20
     assert {r["sequence_number"] for r in rows} == {str(i) for i in range(20)}
+
+
+def test_older_catalog_header_is_widened_on_append(tmp_path):
+    """Columns are append-only, so an older file must be upgraded, not overflowed."""
+    import csv as _csv
+
+    from attic.core.catalog import COLUMNS, CatalogRow, append_row, read_rows
+
+    old_cols = COLUMNS[:-5]  # header as written before the flux columns existed
+    path = tmp_path / "catalog.csv"
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(fh, fieldnames=old_cols)
+        w.writeheader()
+        w.writerow({c: "" for c in old_cols} | {"chosen_name": "OldDisk", "status": "ok"})
+
+    append_row(str(tmp_path), CatalogRow(
+        chosen_name="NewDisk", status="ok", flux_filename="NewDisk.scp.zst",
+    ))
+
+    rows = read_rows(str(tmp_path))
+    assert [r["chosen_name"] for r in rows] == ["OldDisk", "NewDisk"]
+    # The pre-existing row survives intact and gains empty new columns...
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["flux_filename"] == ""
+    # ...and the new value is reachable by name rather than stranded past the end.
+    assert rows[1]["flux_filename"] == "NewDisk.scp.zst"
+    assert None not in rows[1]
+
+
+def test_unrecognized_header_is_left_alone(tmp_path):
+    import csv as _csv
+
+    from attic.core.catalog import CatalogRow, append_row
+
+    path = tmp_path / "catalog.csv"
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(fh, fieldnames=["something", "unexpected"])
+        w.writeheader()
+        w.writerow({"something": "a", "unexpected": "b"})
+    before = path.read_text()
+
+    append_row(str(tmp_path), CatalogRow(chosen_name="X", status="ok"))
+
+    # The foreign rows must still be there verbatim; we never rewrite what we
+    # do not understand.
+    assert path.read_text().startswith(before)

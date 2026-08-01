@@ -33,6 +33,24 @@ class AppSettings:
     # Floppy geometry (the track-grid dimensions)
     floppy_cylinders: int = 80
     floppy_heads: int = 2
+    # gw refuses to write a sector image without a format. "ibm.scan" probes the
+    # IBM FM/MFM variants per track, which covers the DOS-through-XP era range
+    # (160K/360K/720K/1.2M/1.44M) without knowing the disk up front. Override for
+    # non-IBM media (e.g. "amiga.amigados", "atarist.720").
+    floppy_format: str = "ibm.scan"
+    # Serial port of the Greaseweazle; blank lets gw auto-detect (the usual case,
+    # and the only sane default when the port number moves between plug-ins).
+    floppy_device: str = ""
+    # Capture the raw flux stream and decode the sector image from it host-side,
+    # rather than letting gw decode during the read. Costs ~10-15 MB compressed
+    # per disk but preserves a master that can be re-decoded years later without
+    # putting fragile media back in the drive. Also frees the drive sooner: only
+    # the flux read needs hardware.
+    floppy_capture_flux: bool = True
+    # Revolutions per track for the flux read. 0 uses the format's own default
+    # (2 for ibm.scan). More revolutions give a damaged track more independent
+    # samples to recover from, at ~50% more storage per extra revolution.
+    floppy_flux_revs: int = 0
 
     # Webcam
     camera_index: int = 0
