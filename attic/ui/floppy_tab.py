@@ -55,7 +55,8 @@ class FloppyTab(PipelineTab):
         panel = self.context.processing_panel
         if panel is not None:
             panel.start_job(
-                request.session_id, outcome.physical_label or "Floppy (unlabeled)"
+                request.session_id, MediaType.FLOPPY,
+                outcome.physical_label or "Floppy (unlabeled)",
             )
 
         worker = FloppyCaptureWorker(

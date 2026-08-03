@@ -25,13 +25,17 @@ def _make_context(qapp, working_folder, settings=None):
     from attic.core.settings import AppSettings
     from attic.ui.app_context import AppContext
     from attic.ui.pending_labels_panel import PendingLabelsPanel
+    from attic.ui.processing_panel import ProcessingPanel
     from attic.ui.session import Session
 
     session = Session(working_folder)
     session.ensure_skeleton()
     panel = PendingLabelsPanel()
+    # A real Processing panel, so routing's calls into it are exercised rather
+    # than skipped by the None guard.
     ctx = AppContext(
         session=session, finalize_pool=FakePool(), pending_panel=panel,
+        processing_panel=ProcessingPanel(),
         settings=settings or AppSettings(),
     )
     return ctx, panel
