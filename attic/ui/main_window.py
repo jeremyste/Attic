@@ -1,9 +1,14 @@
-"""Main window: three pipeline tabs + an always-visible Pending Labels panel.
+"""Main window: three pipeline tabs + the Processing and Pending Labels panels.
 
 Each tab is independently operable (starting an HDD rescue never blocks the floppy
-or optical tabs — every capture runs in its own QThread and compression runs in a
-shared pool). The Pending Labels panel is docked so it stays visible regardless of
-the active tab.
+or optical tabs; every capture runs in its own QThread and compression runs in a
+shared pool). Both panels are docked so they stay visible regardless of the
+active tab.
+
+A job outlives the tab that started it: the drive is released as soon as the
+hardware is done, so captures overlap. The Processing panel is the only place
+that shows the whole picture, which is why the finalize pool's signals are
+forwarded to it here as well as to the status bar.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from .floppy_tab import FloppyTab
 from .hdd_tab import HddTab
 from .optical_tab import OpticalTab
 from .pending_labels_panel import PendingLabelsPanel
+from .processing_panel import ProcessingPanel
 from .session import Session
 from .settings_dialog import SettingsDialog
 
@@ -36,10 +42,12 @@ class MainWindow(QMainWindow):
 
         self.finalize_pool = FinalizePool()
         self.pending_panel = PendingLabelsPanel()
+        self.processing_panel = ProcessingPanel()
         self.context = AppContext(
             session=session,
             finalize_pool=self.finalize_pool,
             pending_panel=self.pending_panel,
+            processing_panel=self.processing_panel,
             settings=load_settings(session.working_folder),
             parent=self,
         )
@@ -52,22 +60,28 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
 
+        areas = (
+            Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea
+        )
+        proc_dock = QDockWidget("Processing", self)
+        proc_dock.setWidget(self.processing_panel)
+        proc_dock.setAllowedAreas(areas)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, proc_dock)
+
         dock = QDockWidget("Pending Labels", self)
         dock.setWidget(self.pending_panel)
-        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
+        dock.setAllowedAreas(areas)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(f"Working folder: {session.working_folder}")
 
         # Finalize-pool signals are cross-thread; Qt queues them to the GUI thread.
-        self.finalize_pool.signals.progress.connect(
-            lambda name, stage: self.statusBar().showMessage(f"{name}: {stage}")
-        )
+        # The pool reports under the resolved name, which the panel knows as an
+        # alias for the job it has been tracking since the capture began.
+        self.finalize_pool.signals.progress.connect(self._on_finalize_progress)
         self.finalize_pool.signals.done.connect(self._on_finalize_done)
-        self.finalize_pool.signals.failed.connect(
-            lambda name, err: self.statusBar().showMessage(f"{name}: FAILED — {err}")
-        )
+        self.finalize_pool.signals.failed.connect(self._on_finalize_failed)
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("&File")
@@ -88,8 +102,18 @@ class MainWindow(QMainWindow):
                 tab.apply_settings()
         self.statusBar().showMessage("Settings saved to working folder.")
 
+    def _on_finalize_progress(self, name: str, stage: str) -> None:
+        self.processing_panel.set_stage_by_name(name, stage)
+        self.statusBar().showMessage(f"{name}: {stage}")
+
+    def _on_finalize_failed(self, name: str, err: str) -> None:
+        self.processing_panel.finish_by_name(name, f"FAILED - {err}")
+        self.statusBar().showMessage(f"{name}: FAILED - {err}")
+
     def _on_finalize_done(self, final_dir: str, rows) -> None:
         self.context.on_finalize_done(final_dir, rows)
+        for row in rows:
+            self.processing_panel.finish_by_name(row.chosen_name, "archived")
         self.statusBar().showMessage(f"Archived: {final_dir}")
 
     def closeEvent(self, ev) -> None:

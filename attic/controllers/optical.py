@@ -51,6 +51,11 @@ class OpticalCaptureWorker(CaptureWorker):
             on_progress=self._emit_progress,
             should_cancel=self.isInterruptionRequested,
         )
+        # The disc is no longer needed once ddrescue has finished with it;
+        # detection, extraction and compression are all host-side work, so the
+        # next disc can be loaded while this one finishes processing.
+        self.release_drive()
+
         if outcome.returncode != 0 and (outcome.last_summary is None
                                         or outcome.last_summary.rescued_bytes == 0):
             return CaptureArtifacts(

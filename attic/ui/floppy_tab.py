@@ -15,7 +15,11 @@ from .widgets.track_grid import TrackGrid
 class FloppyTab(PipelineTab):
     def __init__(self, context: AppContext, parent=None):
         super().__init__(context, MediaType.FLOPPY, parent)
-        self._worker: FloppyCaptureWorker | None = None
+        # Several jobs can be in flight: the drive is released after the read,
+        # so a new capture may start while earlier ones are still decoding or
+        # compressing. Hold a reference to each until it finishes, or Python
+        # would collect a running QThread out from under Qt.
+        self._workers: list[FloppyCaptureWorker] = []
 
         s = context.settings
         self.grid = TrackGrid(cylinders=s.floppy_cylinders, heads=s.floppy_heads)
@@ -48,6 +52,12 @@ class FloppyTab(PipelineTab):
             source_id="floppy",
             photos=outcome.photos,
         )
+        panel = self.context.processing_panel
+        if panel is not None:
+            panel.start_job(
+                request.session_id, outcome.physical_label or "Floppy (unlabeled)"
+            )
+
         worker = FloppyCaptureWorker(
             request,
             disk_format=s.floppy_format,
@@ -60,15 +70,34 @@ class FloppyTab(PipelineTab):
         worker.track_read.connect(lambda tr: self.grid.set_track(tr.cyl, tr.head, tr.status))
         worker.captured.connect(self._on_captured)
         worker.failed.connect(self._on_failed)
-        worker.finished.connect(lambda: self.set_busy(False))
-        self._worker = worker
+        if panel is not None:
+            worker.stage.connect(
+                lambda text, jid=request.session_id: panel.set_stage(jid, text)
+            )
+        # Begin Capture comes back as soon as the drive is free, not when the
+        # whole job is done -- decode/extract/compress continue in the background.
+        worker.drive_released.connect(lambda: self.set_busy(False))
+        worker.finished.connect(lambda w=worker: self._forget(w))
+        self._workers.append(worker)
         worker.start()
 
+    def _forget(self, worker: FloppyCaptureWorker) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+
     def _on_captured(self, request, staging, artifacts) -> None:
-        self.set_stage("Naming / finalizing")
         self.context.route_single(request, staging, artifacts)
-        self.set_stage("Idle — ready for next disk")
+        self._settle_stage("Idle - ready for next disk")
 
     def _on_failed(self, summary: str) -> None:
         self.append_log(f"FAILED: {summary}")
-        self.set_stage("Failed — see log")
+        self._settle_stage("Failed - see log")
+
+    def _settle_stage(self, text: str) -> None:
+        """Update the stage label only if no other capture is still running.
+
+        With jobs overlapping, a finishing job must not overwrite the live
+        status of the read that started after it.
+        """
+        if not any(w.isRunning() for w in self._workers):
+            self.set_stage(text)

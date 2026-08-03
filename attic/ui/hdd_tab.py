@@ -37,8 +37,10 @@ class HddTab(PipelineTab):
     def __init__(self, context: AppContext, parent=None):
         super().__init__(context, MediaType.HDD, parent)
         self._devices: list[devices.BlockDevice] = []
+        # Only one rescue at a time (it holds the drive), but extractions run on
+        # the captured image and outlive it, so several can overlap.
         self._rescue: HddRescueWorker | None = None
-        self._extract: HddExtractWorker | None = None
+        self._extracts: list[HddExtractWorker] = []
         self._request: JobRequest | None = None
         self._staging = None
         self._image_path = ""
@@ -124,6 +126,13 @@ class HddTab(PipelineTab):
         self._log_path = self._staging.child("drive.log")
         self._stderr_path = self._staging.child("ddrescue.stderr")
 
+        panel = self.context.processing_panel
+        if panel is not None:
+            panel.start_job(
+                self._request.session_id, MediaType.HDD,
+                outcome.physical_label or device.path,
+            )
+
         self.bar.clear()
         self.set_busy(True)
         self._start_pass(device.path, first_pass=True)
@@ -195,6 +204,15 @@ class HddTab(PipelineTab):
         worker.log.connect(self.append_log)
         worker.pass_done.connect(lambda s: self._on_pass_done(device_path, s))
         worker.failed.connect(self._on_failed)
+        panel = self.context.processing_panel
+        if panel is not None and self._request is not None:
+            jid = self._request.session_id
+            worker.stage.connect(lambda t: panel.set_stage(jid, t))
+            # ddrescue's rescued fraction is a genuine measurement, so this bar
+            # is determinate rather than a spinner.
+            worker.map_progress.connect(
+                lambda s: panel.set_percent(jid, int(s.rescued_fraction * 100))
+            )
         self._rescue = worker
         worker.start()
 
@@ -218,23 +236,46 @@ class HddTab(PipelineTab):
 
     def _start_extract(self) -> None:
         self.set_stage("Extracting partitions…")
+        # Bind this job's identity to the worker rather than reading tab state
+        # later: the drive is released here, so a *new* capture may overwrite
+        # self._request/_staging while this extraction is still running.
+        request, staging_dir = self._request, self._staging
+        panel = self.context.processing_panel
+        jid = request.session_id
+
         worker = HddExtractWorker(
-            self._request, self._staging, self._image_path, self._log_path
+            request, staging_dir, self._image_path, self._log_path
         )
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
-        worker.done.connect(self._on_extract_done)
+        worker.done.connect(
+            lambda result: self._on_extract_done(request, staging_dir, result)
+        )
         worker.failed.connect(self._on_failed)
-        worker.finished.connect(lambda: self.set_busy(False))
-        self._extract = worker
+        if panel is not None:
+            worker.stage.connect(lambda t: panel.set_stage(jid, t))
+        worker.finished.connect(lambda w=worker: self._forget(w))
+        self._extracts.append(worker)
         worker.start()
 
-    def _on_extract_done(self, result) -> None:
-        self.set_stage("Naming / finalizing")
-        self.context.route_hdd(self._request, self._staging, result)
-        self.set_stage("Idle — ready for next drive")
+        # The drive is done: passes are finished and everything from here reads
+        # the captured image, so the next drive can be docked now.
+        self.set_busy(False)
+
+    def _forget(self, worker) -> None:
+        if worker in self._extracts:
+            self._extracts.remove(worker)
+
+    def _on_extract_done(self, request, staging_dir, result) -> None:
+        self.context.route_hdd(request, staging_dir, result)
+        self._settle_stage("Idle - ready for next drive")
 
     def _on_failed(self, summary: str) -> None:
         self.append_log(f"FAILED: {summary}")
-        self.set_stage("Failed — see log")
+        self._settle_stage("Failed - see log")
         self.set_busy(False)
+
+    def _settle_stage(self, text: str) -> None:
+        """Don't let a finishing job overwrite a newer capture's live status."""
+        if not any(w.isRunning() for w in self._extracts):
+            self.set_stage(text)

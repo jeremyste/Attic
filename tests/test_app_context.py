@@ -150,3 +150,70 @@ def test_pending_rename_updates_catalog_and_folder(qapp, tmp_path):
     rows = catalog.read_rows(wf)
     assert rows[0]["chosen_name"] == "Recipes"
     assert rows[0]["folder_path"] == "Floppy/Recipes"
+
+
+def test_unattended_naming_never_opens_a_dialog(qapp, tmp_path, monkeypatch):
+    """A labeled disk must not block on a confirmation prompt when unattended.
+
+    Regression: the dialog was gated only on "did we fall back to a generated
+    name", so typing a physical label still produced a modal prompt even with
+    auto-accept on -- which stalls the queue the user is trying to keep fed.
+    """
+    from attic.core.settings import AppSettings
+
+    def _boom(*a, **k):
+        raise AssertionError("NamingDialog must not be constructed")
+
+    monkeypatch.setattr("attic.ui.app_context.NamingDialog", _boom)
+
+    wf = str(tmp_path)
+    ctx, panel = _make_context(
+        qapp, wf, settings=AppSettings(auto_accept_fallback_names=True)
+    )
+    staging = create_staging(wf, MediaType.FLOPPY, "s1")
+    request = JobRequest(
+        working_folder=wf, media_type=MediaType.FLOPPY,
+        physical_label="test2", source_id="floppy",
+    )
+    artifacts = CaptureArtifacts(
+        raw_image_path=staging.child("floppy.img"),
+        detected_label="VOLNAME", filesystem_detected="vfat", status=Status.OK,
+    )
+
+    ctx.route_single(request, staging, artifacts)
+
+    req = ctx.finalize_pool.submitted[0]
+    assert req.chosen_name == "test2"  # the typed label wins, silently
+    assert panel.list.count() == 0
+
+
+def test_naming_dialog_still_shown_when_not_unattended(qapp, tmp_path, monkeypatch):
+    """With auto-accept off, a labeled disk is still confirmed as before."""
+    from attic.core.settings import AppSettings
+
+    shown = []
+
+    class _Dlg:
+        def __init__(self, *a, **k):
+            shown.append(k.get("suggested_name"))
+
+        def exec(self):
+            return 0  # user dismissed; keeps the suggested name
+
+    monkeypatch.setattr("attic.ui.app_context.NamingDialog", _Dlg)
+
+    wf = str(tmp_path)
+    ctx, _ = _make_context(
+        qapp, wf, settings=AppSettings(auto_accept_fallback_names=False)
+    )
+    staging = create_staging(wf, MediaType.FLOPPY, "s1")
+    request = JobRequest(
+        working_folder=wf, media_type=MediaType.FLOPPY,
+        physical_label="test2", source_id="floppy",
+    )
+    ctx.route_single(request, staging, CaptureArtifacts(
+        raw_image_path=staging.child("floppy.img"),
+        detected_label="", filesystem_detected="vfat", status=Status.OK,
+    ))
+
+    assert shown == ["test2"]

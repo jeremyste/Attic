@@ -69,6 +69,15 @@ authentication when needed. Do **not** run the whole app as root.
 ## Running
 
 ```bash
+./run-attic.sh
+```
+
+The launcher checks the environment before starting: Python version, the
+virtualenv and its packages, the external CLI tools, and `dialout` group
+membership for the Greaseweazle. It offers to install anything missing rather
+than failing with a traceback, and is safe to re-run. Or start it directly:
+
+```bash
 source .venv/bin/activate
 python main.py
 ```
@@ -118,6 +127,25 @@ Each pipeline follows the same shape:
 3. **Compress + checksum + catalog.** zstd (level 19, `--long`, all cores) and
    SHA-256 run in a background pool, then the job is atomically moved into place
    and a catalog row is written.
+
+**Begin Capture re-enables as soon as the hardware is free**, not when the job
+finishes. The floppy flux read, the optical ddrescue pass and the HDD rescue
+passes are the only stages that need the drive; decode, extraction, compression
+and cataloguing all continue in the background while you load the next item.
+Several jobs can therefore be in flight at once, across all three pipelines.
+
+The **Processing** panel lists every job still being worked on, tagged by
+pipeline (`[FLOPPY]`, `[HDD]`, `[CD/DVD]`) with its current stage and a progress
+bar. The bar is determinate only where a real measurement exists -- gw's track
+count during a read or decode, ddrescue's rescued fraction -- and shows a busy
+indicator during extraction and compression, which report no usable total.
+Finished jobs linger briefly, then clear.
+
+Turn on **Unattended naming** if you want a capture never to stop and ask: the
+typed label wins, else a detected volume label, else a generated name. Disks
+with no label at all still appear in Pending Labels to be named later. With it
+off, the naming dialog appears after each capture as before -- which will block
+the queue while it waits for you.
 
 ### Floppy flux capture
 
@@ -178,7 +206,7 @@ working folder** (so they travel with the archive):
 | Preserve flux | On by default. Archive a `.scp` flux master and decode the image from it; see [Floppy flux capture](#floppy-flux-capture) |
 | Flux revolutions | Revolutions per track for the flux read. "format default" (2 for `ibm.scan`) unless raised; each extra revolution adds ~50% to the flux size but gives a damaged track another independent sample |
 | Camera index / skip photo | Webcam selection; disable photo prompts |
-| Auto-accept generated names | Skip Pending Labels for unlabeled volumes |
+| Unattended naming | Never interrupt a capture to confirm a name; unlabeled disks skip the Pending Labels queue too |
 | HDD photo-before-dock | Photograph & label before selecting the drive |
 
 ## Architecture

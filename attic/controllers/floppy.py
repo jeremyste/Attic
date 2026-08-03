@@ -135,6 +135,43 @@ def build_gw_convert_cmd(
     ]
 
 
+def _parse_set(spec: str) -> int:
+    """Count members of a gw SET: comma-separated integers and ranges."""
+    total = 0
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            total += int(hi) - int(lo) + 1
+        else:
+            total += 1
+    return total
+
+
+def parse_track_total(line: str) -> int | None:
+    """Total tracks a gw stage will touch, from its header line.
+
+    gw announces the work up front -- "Reading c=0-79:h=0-1 revs=2" or
+    "Converting c=0-79:h=0-1 -> ..." -- which is the only honest source of a
+    denominator for a progress bar. Returns None for any other line.
+    """
+    m = re.match(r"\s*(?:Reading|Converting)\s+(c=[^\s]+)", line)
+    if not m:
+        return None
+    cyls = heads = 0
+    for field_spec in m.group(1).split(":"):
+        key, _, value = field_spec.partition("=")
+        if key == "c":
+            cyls = _parse_set(value)
+        elif key == "h":
+            heads = _parse_set(value)
+    if cyls <= 0:
+        return None
+    return cyls * max(heads, 1)
+
+
 def parse_gw_track_line(line: str) -> TrackResult | None:
     """Parse one gw read output line into a :class:`TrackResult` (or None).
 
@@ -183,6 +220,7 @@ class FloppyCaptureWorker(CaptureWorker):
         self.log.emit(" ".join(cmd))
         run = _GwRun()
         awaiting_fatal_text = False
+        total_tracks = 0
 
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -203,11 +241,23 @@ class FloppyCaptureWorker(CaptureWorker):
             elif stripped.startswith(_CMD_FAILED_MARKER) and not run.error:
                 run.error = stripped
 
-            if watch_tracks:
-                tr = parse_gw_track_line(line)
-                if tr:
+            # Both the read and the decode announce their track count up front,
+            # which is what makes a real (rather than invented) progress bar
+            # possible for each stage.
+            if not total_tracks:
+                total_tracks = parse_track_total(line) or 0
+
+            tr = parse_gw_track_line(line)
+            if tr:
+                if watch_tracks:
                     run.tracks[(tr.cyl, tr.head)] = tr.status
                     self.track_read.emit(tr)
+                else:
+                    run.tracks.setdefault((tr.cyl, tr.head), tr.status)
+                if total_tracks:
+                    self.progress.emit(
+                        min(100, round(100 * len(run.tracks) / total_tracks))
+                    )
             if self.isInterruptionRequested():
                 run.cancelled = True
                 proc.terminate()
@@ -244,6 +294,10 @@ class FloppyCaptureWorker(CaptureWorker):
             ),
             logfh, watch_tracks=True,
         )
+
+        # The drive is done the moment the flux is on disk; everything below is
+        # pure host work, so let the next disk be loaded now.
+        self.release_drive()
 
         if read.cancelled:
             return CaptureArtifacts(
@@ -298,6 +352,9 @@ class FloppyCaptureWorker(CaptureWorker):
             ),
             logfh, watch_tracks=True,
         )
+
+        # Drive free from here on; detection and extraction are host-side.
+        self.release_drive()
 
         # gw writes the image only once the read completes, so a missing or
         # empty file means nothing usable was captured -- regardless of exit code.

@@ -99,9 +99,14 @@ class SettingsDialog(QDialog):
 
         # Naming / workflow
         self.auto_accept = QCheckBox(
-            "Auto-accept generated names (don't queue unlabeled volumes)"
+            "Unattended naming (never interrupt a capture to confirm a name)"
         )
         self.auto_accept.setChecked(settings.auto_accept_fallback_names)
+        self.auto_accept.setToolTip(
+            "Use the label you typed, else a detected volume label, else a "
+            "generated name -- with no confirmation dialog. Disks with no label "
+            "at all are still listed in Pending Labels to name later."
+        )
         self.hdd_photo_first = QCheckBox(
             "HDD: photograph & label before selecting the drive"
         )
@@ -109,8 +114,9 @@ class SettingsDialog(QDialog):
         flow = QVBoxLayout()
         flow.addWidget(self.auto_accept)
         flow.addWidget(QLabel(
-            "   When on, an unlabeled disk keeps its generated name silently "
-            "instead of\n   waiting in Pending Labels."
+            "   Nothing modal interrupts a capture, so you can load the next\n"
+            "   disk while the last one is still processing. Unlabeled disks\n"
+            "   keep a generated name and are not queued in Pending Labels."
         ))
         flow.addWidget(self.hdd_photo_first)
 

@@ -88,11 +88,23 @@ class CaptureWorker(QThread):
     # emitted on any fatal error with a summary string; the staging dir is left
     # in place for inspection.
     failed = pyqtSignal(str)
+    # emitted once the hardware is no longer needed -- typically well before the
+    # job finishes, since decode/detect/extract are pure host work. The tab
+    # re-enables Begin Capture on this, so the next disk can be loaded while the
+    # current one is still being processed.
+    drive_released = pyqtSignal()
 
     def __init__(self, request: JobRequest, parent=None):
         super().__init__(parent)
         self.request = request
         self.staging: StagingDir | None = None
+        self._released = False
+
+    def release_drive(self) -> None:
+        """Signal that the drive is free. Idempotent; safe to call repeatedly."""
+        if not self._released:
+            self._released = True
+            self.drive_released.emit()
 
     # --- subclass hook ------------------------------------------------------
 
@@ -119,6 +131,10 @@ class CaptureWorker(QThread):
             summary = f"{type(exc).__name__}: {exc}"
             self.log.emit(traceback.format_exc())
             self.failed.emit(summary)
+        finally:
+            # Backstop: a capture that never reached its own release point (or
+            # threw) must not leave Begin Capture disabled forever.
+            self.release_drive()
 
     # --- naming helpers for staging artifacts -------------------------------
 

@@ -27,6 +27,7 @@ from ..core.settings import AppSettings
 from ..core.staging import StagingDir
 from .naming_dialog import NamingDialog
 from .pending_labels_panel import PendingItem, PendingLabelsPanel
+from .processing_panel import ProcessingPanel
 from .session import Session
 
 
@@ -35,6 +36,7 @@ class AppContext:
     session: Session
     finalize_pool: FinalizePool
     pending_panel: PendingLabelsPanel
+    processing_panel: ProcessingPanel | None = None
     settings: AppSettings = field(default_factory=AppSettings)
     parent: QWidget | None = None
     # chosen_name -> PendingItem to add to the panel once finalize completes.
@@ -73,7 +75,9 @@ class AppContext:
             resolution.used_fallback and not self.settings.auto_accept_fallback_names
         )
 
-        if not resolution.used_fallback:
+        # Auto-accept means unattended: nothing modal may interrupt, because the
+        # user is expected to be loading the next disk while this one processes.
+        if not resolution.used_fallback and not self.settings.auto_accept_fallback_names:
             # Confirm/adjust with the naming dialog.
             dlg = NamingDialog(
                 request.media_type,
@@ -104,6 +108,9 @@ class AppContext:
             self._pending_after[chosen] = PendingItem(
                 self.session.working_folder, request.media_type, chosen
             )
+
+        if self.processing_panel is not None:
+            self.processing_panel.rename_job(request.session_id, chosen)
 
         self.finalize_pool.submit(
             self._finalize_request(
@@ -136,7 +143,8 @@ class AppContext:
             resolution.used_fallback and not self.settings.auto_accept_fallback_names
         )
 
-        if not resolution.used_fallback:
+        # Auto-accept means unattended: nothing modal may interrupt.
+        if not resolution.used_fallback and not self.settings.auto_accept_fallback_names:
             dlg = NamingDialog(
                 request.media_type,
                 physical_label=request.physical_label,
@@ -159,6 +167,9 @@ class AppContext:
             self._pending_after[chosen] = PendingItem(
                 self.session.working_folder, request.media_type, chosen
             )
+
+        if self.processing_panel is not None:
+            self.processing_panel.rename_job(request.session_id, chosen)
 
         self.finalize_pool.submit(
             self._finalize_request(
@@ -192,6 +203,11 @@ class AppContext:
         self, request: JobRequest, staging: StagingDir, artifacts: CaptureArtifacts
     ) -> None:
         note = f"Temp dir left for inspection: {staging.rel_path()}"
+        if self.processing_panel is not None:
+            self.processing_panel.finish_job(
+                request.session_id,
+                f"FAILED - {artifacts.error_summary or 'capture failed'}",
+            )
         catalog.append_row(
             self.session.working_folder,
             CatalogRow(

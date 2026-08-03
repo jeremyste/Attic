@@ -15,7 +15,9 @@ from .widgets.rescue_bar import RescueBar
 class OpticalTab(PipelineTab):
     def __init__(self, context: AppContext, parent=None):
         super().__init__(context, MediaType.OPTICAL, parent)
-        self._worker: OpticalCaptureWorker | None = None
+        # Jobs overlap: the drive is released after imaging, so a new capture
+        # can start while earlier ones are still extracting or compressing.
+        self._workers: list[OpticalCaptureWorker] = []
 
         self.device_edit = QLineEdit(context.settings.optical_device)
         dev_row = QHBoxLayout()
@@ -51,21 +53,42 @@ class OpticalTab(PipelineTab):
             source_id=self.device_edit.text().strip() or "/dev/sr0",
             photos=outcome.photos,
         )
+        panel = self.context.processing_panel
+        if panel is not None:
+            panel.start_job(
+                request.session_id, MediaType.OPTICAL,
+                outcome.physical_label or "Disc (unlabeled)",
+            )
+
         worker = OpticalCaptureWorker(request, retries=self.context.settings.ddrescue_retries)
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
         worker.map_progress.connect(self.bar.set_summary)
         worker.captured.connect(self._on_captured)
         worker.failed.connect(self._on_failed)
-        worker.finished.connect(lambda: self.set_busy(False))
-        self._worker = worker
+        if panel is not None:
+            jid = request.session_id
+            worker.stage.connect(lambda t: panel.set_stage(jid, t))
+            worker.progress.connect(lambda p: panel.set_percent(jid, p))
+        # Begin comes back when the drive is free, not when the job is done.
+        worker.drive_released.connect(lambda: self.set_busy(False))
+        worker.finished.connect(lambda w=worker: self._forget(w))
+        self._workers.append(worker)
         worker.start()
 
+    def _forget(self, worker: OpticalCaptureWorker) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+
     def _on_captured(self, request, staging, artifacts) -> None:
-        self.set_stage("Naming / finalizing")
         self.context.route_single(request, staging, artifacts)
-        self.set_stage("Idle — ready for next disc")
+        self._settle_stage("Idle - ready for next disc")
 
     def _on_failed(self, summary: str) -> None:
         self.append_log(f"FAILED: {summary}")
-        self.set_stage("Failed — see log")
+        self._settle_stage("Failed - see log")
+
+    def _settle_stage(self, text: str) -> None:
+        """Don't let a finishing job overwrite a newer capture's live status."""
+        if not any(w.isRunning() for w in self._workers):
+            self.set_stage(text)
