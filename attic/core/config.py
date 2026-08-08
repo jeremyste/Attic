@@ -96,6 +96,7 @@ class Status(str, Enum):
     PARTIAL = "partial"
     FAILED = "failed"
     UNRECOGNIZED_FS = "unrecognized_fs"
+    CANCELLED = "cancelled"
 
 
 # Sentinel written to the detected-filesystem column when nothing recognized it.

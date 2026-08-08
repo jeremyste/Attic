@@ -162,6 +162,8 @@ class AppContext:
             row.sequence_number = str(resolution.sequence_number)
             if resolution.used_fallback:
                 row.fallback_date_used = result.fallback_date
+            if result.read_bad_bytes >= 0:
+                row.read_bad_bytes = str(result.read_bad_bytes)
 
         if queue_pending:
             self._pending_after[chosen] = PendingItem(

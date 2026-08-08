@@ -19,13 +19,16 @@ fabricated percentage.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QProgressBar,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -48,7 +51,12 @@ def media_tag(media_type: MediaType) -> str:
 
 
 class _JobRow(QWidget):
-    """One job: '[TAG] name', its current stage, and a progress bar."""
+    """One job: '[TAG] name', its current stage, a progress bar, and --
+    once it reaches the finalize pool (compression) -- Cancel/Skip actions.
+    """
+
+    cancel_requested = pyqtSignal()
+    skip_requested = pyqtSignal()
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
@@ -59,13 +67,40 @@ class _JobRow(QWidget):
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(10)
 
+        # Only meaningful once the job is being compressed/finalized -- a raw
+        # capture in progress (imaging, extraction) has nothing here to act
+        # on yet, so these start hidden until set_finalizing() reveals them.
+        self.skip_btn = QPushButton("Skip compression")
+        self.skip_btn.setToolTip(
+            "Keep the raw (uncompressed) image instead of waiting for "
+            "compression to finish."
+        )
+        self.skip_btn.clicked.connect(self.skip_requested.emit)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Stop this job and discard its raw image.")
+        self.cancel_btn.clicked.connect(self.cancel_requested.emit)
+        self.skip_btn.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        actions = QHBoxLayout()
+        actions.addWidget(self.skip_btn)
+        actions.addWidget(self.cancel_btn)
+        actions.addStretch(1)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 6)
         layout.setSpacing(2)
         layout.addWidget(self.title)
         layout.addWidget(self.stage)
         layout.addWidget(self.bar)
+        layout.addLayout(actions)
         self.set_busy()
+
+    def set_finalizing(self, finalizing: bool) -> None:
+        self.skip_btn.setVisible(finalizing)
+        self.cancel_btn.setVisible(finalizing)
+
+    def hide_actions(self) -> None:
+        self.set_finalizing(False)
 
     def set_busy(self) -> None:
         """Indeterminate: work is happening but has no meaningful total."""
@@ -82,6 +117,10 @@ class _JobRow(QWidget):
 
 class ProcessingPanel(QGroupBox):
     """Live list of in-flight jobs across every pipeline."""
+
+    # (chosen_name,) -- connect these to FinalizePool.cancel/skip_compression.
+    cancel_requested = pyqtSignal(str)
+    skip_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__("Processing", parent)
@@ -141,14 +180,42 @@ class ProcessingPanel(QGroupBox):
         self._alias[chosen_name] = job_id
         row.title.setText(f"[{self._tags[job_id]}] {chosen_name}")
         self.set_stage(job_id, "queued for compression")
+        # Only meaningful from here on: the job now has a raw image sitting in
+        # the finalize pool for Cancel/Skip to act on.
+        row.set_finalizing(True)
+        row.cancel_requested.connect(lambda n=chosen_name: self._confirm_cancel(n))
+        row.skip_requested.connect(lambda n=chosen_name: self._confirm_skip(n))
 
     def finish_job(self, job_id: str, note: str = "done") -> None:
         row = self._rows.get(job_id)
         if row is None:
             return
+        row.hide_actions()
         row.stage.setText(note)
         row.set_done()
         QTimer.singleShot(DONE_LINGER_MS, lambda: self._drop(job_id))
+
+    def _confirm_cancel(self, chosen_name: str) -> None:
+        reply = QMessageBox.question(
+            self, "Cancel job",
+            f'Cancel "{chosen_name}"?\n\n'
+            "The raw image will be discarded -- nothing from this capture "
+            "will be archived.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.cancel_requested.emit(chosen_name)
+
+    def _confirm_skip(self, chosen_name: str) -> None:
+        reply = QMessageBox.question(
+            self, "Skip compression",
+            f'Skip compression for "{chosen_name}"?\n\n'
+            "The raw (uncompressed) image will be archived instead -- larger "
+            "on disk, but ready immediately.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.skip_requested.emit(chosen_name)
 
     # --- keyed by the resolved name (what the finalize pool reports) --------
 

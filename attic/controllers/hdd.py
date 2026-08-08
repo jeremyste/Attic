@@ -107,6 +107,9 @@ class HddExtractResult:
     fallback_date: str
     overall_status: Status
     partitions: list[PartitionOutcome] = field(default_factory=list)
+    # ddrescue bad-byte count from the pass the user accepted; -1 means
+    # unknown (set by the tab, which is the only place that sees pass_done).
+    read_bad_bytes: int = -1
 
 
 class HddExtractWorker(QThread):

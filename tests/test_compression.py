@@ -1,10 +1,13 @@
 import pytest
 
+import attic.core.compression as compression_mod
 from attic.core.checksums import sha256_file
 from attic.core.compression import (
+    CompressionCancelled,
     build_zstd_argv,
     compress_and_checksum,
     compressed_path_for,
+    raw_only_result,
 )
 from attic.core.subprocess_util import CommandError
 
@@ -69,3 +72,116 @@ def test_compress_raises_when_zstd_fails(tmp_path, fake_run):
     fake_run.when(lambda a: a and a[0] == "zstd", returncode=1, stderr="zstd boom")
     with pytest.raises(CommandError):
         compress_and_checksum(str(raw), str(tmp_path / "disk.img.zst"))
+
+
+# --- cancellable compression (should_cancel) ----------------------------------
+
+
+class _FakePopen:
+    """Stands in for subprocess.Popen. Reports "still running" for
+    ``polls_until_done`` calls to poll(), then exits 0 and (optionally)
+    writes ``out_path`` -- unless terminate() is called first, after which
+    it reports as killed (-15)."""
+
+    def __init__(self, polls_until_done=1, out_path=None):
+        self._polls_left = polls_until_done
+        self._terminated = False
+        self.returncode = None
+        self.stderr = None
+        self._out_path = out_path
+
+    def __call__(self, argv, **kw):  # used directly as the Popen replacement
+        return self
+
+    def poll(self):
+        if self.returncode is not None:
+            return self.returncode
+        if self._terminated:
+            self.returncode = -15
+            return self.returncode
+        if self._polls_left <= 0:
+            self.returncode = 0
+            if self._out_path:
+                with open(self._out_path, "wb") as fh:
+                    fh.write(b"z" * 50)
+            return self.returncode
+        self._polls_left -= 1
+        return None
+
+    def terminate(self):
+        self._terminated = True
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.poll()
+        return self.returncode
+
+
+def test_compress_and_checksum_succeeds_when_never_cancelled(tmp_path, monkeypatch, fake_run):
+    raw = tmp_path / "disk.img"
+    raw.write_bytes(b"x" * 10)
+    out = tmp_path / "disk.img.zst"
+    fake = _FakePopen(polls_until_done=2, out_path=str(out))
+    monkeypatch.setattr(compression_mod.subprocess, "Popen", fake)
+    fake_run.when("sha256sum", stdout="deadbeef  x\n")
+
+    result = compress_and_checksum(
+        str(raw), str(out), should_cancel=lambda: False, poll_interval=0,
+    )
+
+    assert result.compressed_size_bytes == 50
+    assert out.exists()
+
+
+def test_compress_and_checksum_cancelled_terminates_and_raises(tmp_path, monkeypatch):
+    raw = tmp_path / "disk.img"
+    raw.write_bytes(b"x" * 10)
+    out = tmp_path / "disk.img.zst"
+    fake = _FakePopen(polls_until_done=5, out_path=str(out))
+    monkeypatch.setattr(compression_mod.subprocess, "Popen", fake)
+
+    with pytest.raises(CompressionCancelled):
+        compress_and_checksum(
+            str(raw), str(out), should_cancel=lambda: True, poll_interval=0,
+        )
+
+    assert fake._terminated
+    assert not out.exists()  # zstd never got to "finish" writing it
+
+
+def test_compress_and_checksum_cancel_fires_after_a_few_polls(tmp_path, monkeypatch):
+    raw = tmp_path / "disk.img"
+    raw.write_bytes(b"x" * 10)
+    out = tmp_path / "disk.img.zst"
+    fake = _FakePopen(polls_until_done=100, out_path=str(out))
+    monkeypatch.setattr(compression_mod.subprocess, "Popen", fake)
+
+    calls = {"n": 0}
+
+    def should_cancel():
+        calls["n"] += 1
+        return calls["n"] >= 3
+
+    with pytest.raises(CompressionCancelled):
+        compress_and_checksum(str(raw), str(out), should_cancel=should_cancel, poll_interval=0)
+
+    assert fake._terminated
+    assert calls["n"] == 3
+
+
+# --- raw_only_result (skip-compression path) ----------------------------------
+
+
+def test_raw_only_result_uses_the_same_file_for_both(tmp_path, fake_run):
+    raw = tmp_path / "disk.img"
+    raw.write_bytes(b"x" * 500)
+    fake_run.when("sha256sum", stdout="cafef00d  disk.img\n")
+
+    result = raw_only_result(str(raw))
+
+    assert result.raw_path == str(raw)
+    assert result.compressed_path == str(raw)
+    assert result.raw_size_bytes == 500
+    assert result.compressed_size_bytes == 500
+    assert result.sha256_raw == "cafef00d"
+    assert result.sha256_compressed == "cafef00d"

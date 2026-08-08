@@ -82,6 +82,13 @@ class MainWindow(QMainWindow):
         self.finalize_pool.signals.progress.connect(self._on_finalize_progress)
         self.finalize_pool.signals.done.connect(self._on_finalize_done)
         self.finalize_pool.signals.failed.connect(self._on_finalize_failed)
+        self.finalize_pool.signals.cancelled.connect(self._on_finalize_cancelled)
+        # The panel's Cancel/Skip buttons only know a job's chosen name; the
+        # pool is what actually holds the cancellation handle for it.
+        self.processing_panel.cancel_requested.connect(self.finalize_pool.cancel)
+        self.processing_panel.skip_requested.connect(
+            self.finalize_pool.skip_compression
+        )
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("&File")
@@ -109,6 +116,10 @@ class MainWindow(QMainWindow):
     def _on_finalize_failed(self, name: str, err: str) -> None:
         self.processing_panel.finish_by_name(name, f"FAILED - {err}")
         self.statusBar().showMessage(f"{name}: FAILED - {err}")
+
+    def _on_finalize_cancelled(self, name: str) -> None:
+        self.processing_panel.finish_by_name(name, "Cancelled")
+        self.statusBar().showMessage(f"{name}: cancelled")
 
     def _on_finalize_done(self, final_dir: str, rows) -> None:
         self.context.on_finalize_done(final_dir, rows)

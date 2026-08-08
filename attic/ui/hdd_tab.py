@@ -30,6 +30,7 @@ from ..core.config import MediaType
 from ..core.ddrescue import MapSummary
 from .app_context import AppContext
 from .base_tab import PipelineTab
+from .widgets.hdd_archive_panel import HddArchivePanel
 from .widgets.rescue_bar import RescueBar
 
 
@@ -46,6 +47,7 @@ class HddTab(PipelineTab):
         self._image_path = ""
         self._log_path = ""
         self._stderr_path = ""
+        self._accepted_bad_bytes = -1  # set when the user accepts a rescue pass
 
         self.device_combo = QComboBox()
         self.refresh_btn = QPushButton("Refresh")
@@ -67,6 +69,16 @@ class HddTab(PipelineTab):
         self.bar = RescueBar()
         self._layout.addWidget(QLabel("Rescue progress:"))
         self._layout.addWidget(self.bar)
+
+        self.archive_panel = HddArchivePanel(context.session.working_folder)
+        self.archive_panel.list.setMaximumHeight(220)
+        self._layout.addWidget(self.archive_panel)
+        # Bound methods of a QWidget get Qt's cross-thread auto-queuing, so
+        # this is safe even though the pool emits from a worker thread --
+        # unlike a plain lambda, which would run (and touch widgets) there.
+        context.finalize_pool.signals.done.connect(self._refresh_archive_panel)
+        context.finalize_pool.signals.cancelled.connect(self._refresh_archive_panel)
+
         self._install_common()
 
         self.begin_btn.clicked.connect(self._begin)
@@ -232,14 +244,17 @@ class HddTab(PipelineTab):
         if box.clickedButton() is again:
             self._start_pass(device_path, first_pass=False)
         else:
+            self._accepted_bad_bytes = bad
             self._start_extract()
 
     def _start_extract(self) -> None:
         self.set_stage("Extracting partitions…")
         # Bind this job's identity to the worker rather than reading tab state
         # later: the drive is released here, so a *new* capture may overwrite
-        # self._request/_staging while this extraction is still running.
+        # self._request/_staging/_accepted_bad_bytes while this extraction is
+        # still running.
         request, staging_dir = self._request, self._staging
+        bad_bytes = self._accepted_bad_bytes
         panel = self.context.processing_panel
         jid = request.session_id
 
@@ -249,7 +264,7 @@ class HddTab(PipelineTab):
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
         worker.done.connect(
-            lambda result: self._on_extract_done(request, staging_dir, result)
+            lambda result: self._on_extract_done(request, staging_dir, bad_bytes, result)
         )
         worker.failed.connect(self._on_failed)
         if panel is not None:
@@ -266,9 +281,13 @@ class HddTab(PipelineTab):
         if worker in self._extracts:
             self._extracts.remove(worker)
 
-    def _on_extract_done(self, request, staging_dir, result) -> None:
+    def _on_extract_done(self, request, staging_dir, bad_bytes, result) -> None:
+        result.read_bad_bytes = bad_bytes
         self.context.route_hdd(request, staging_dir, result)
         self._settle_stage("Idle - ready for next drive")
+
+    def _refresh_archive_panel(self, *_args) -> None:
+        self.archive_panel.refresh()
 
     def _on_failed(self, summary: str) -> None:
         self.append_log(f"FAILED: {summary}")

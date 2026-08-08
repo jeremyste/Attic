@@ -45,6 +45,14 @@ COLUMNS = [
     "flux_compressed_size_bytes",
     "sha256_flux_raw",
     "sha256_flux_compressed",
+    # Drive-level ddrescue bad-byte count at the pass the user accepted (HDD
+    # only; "" for other media/older rows -- unknown, not "known clean").
+    # Lets "delete this image" require a genuinely clean read, not just a
+    # successful extraction from an image that still had bad sectors.
+    "read_bad_bytes",
+    # Timestamp the compressed/raw image was deleted to reclaim space, or ""
+    # if it's still archived. The row and Extracted Files/ stay either way.
+    "image_deleted_at",
 ]
 
 # Serializes all appends across threads/pipelines within a process.
@@ -80,6 +88,8 @@ class CatalogRow:
     flux_compressed_size_bytes: str = ""
     sha256_flux_raw: str = ""
     sha256_flux_compressed: str = ""
+    read_bad_bytes: str = ""
+    image_deleted_at: str = ""
 
     def as_ordered(self) -> dict[str, str]:
         d = asdict(self)

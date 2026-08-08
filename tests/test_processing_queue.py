@@ -104,6 +104,92 @@ def test_unknown_job_ids_are_ignored(qapp):
     assert panel.rows() == []
 
 
+# --- Cancel / Skip actions ---------------------------------------------------
+
+
+def test_cancel_and_skip_buttons_hidden_until_finalizing(qapp):
+    # isHidden() (the widget's own explicit show/hide flag) rather than
+    # isVisible() (which also requires a shown top-level window, which these
+    # offscreen tests never create) is what actually reflects setVisible().
+    from attic.ui.processing_panel import ProcessingPanel
+
+    panel = ProcessingPanel()
+    panel.start_job("a", MediaType.FLOPPY, "Disk A")
+    row = panel._rows["a"]
+    assert row.cancel_btn.isHidden()
+    assert row.skip_btn.isHidden()
+
+    panel.rename_job("a", "Disk A")
+    assert not row.cancel_btn.isHidden()
+    assert not row.skip_btn.isHidden()
+
+    panel.finish_by_name("Disk A", "archived")
+    assert row.cancel_btn.isHidden()
+    assert row.skip_btn.isHidden()
+
+
+def test_clicking_cancel_asks_then_emits_with_chosen_name(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    from attic.ui.processing_panel import ProcessingPanel
+
+    panel = ProcessingPanel()
+    panel.start_job("a", MediaType.FLOPPY, "Disk A")
+    panel.rename_job("a", "Disk A")
+
+    emitted = []
+    panel.cancel_requested.connect(emitted.append)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+    )
+
+    panel._rows["a"].cancel_btn.click()
+
+    assert emitted == ["Disk A"]
+
+
+def test_declining_the_confirmation_does_not_emit(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    from attic.ui.processing_panel import ProcessingPanel
+
+    panel = ProcessingPanel()
+    panel.start_job("a", MediaType.FLOPPY, "Disk A")
+    panel.rename_job("a", "Disk A")
+
+    emitted = []
+    panel.cancel_requested.connect(emitted.append)
+    panel.skip_requested.connect(emitted.append)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No
+    )
+
+    panel._rows["a"].cancel_btn.click()
+    panel._rows["a"].skip_btn.click()
+
+    assert emitted == []
+
+
+def test_clicking_skip_asks_then_emits_with_chosen_name(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    from attic.ui.processing_panel import ProcessingPanel
+
+    panel = ProcessingPanel()
+    panel.start_job("a", MediaType.HDD, "/dev/sdb")
+    panel.rename_job("a", "drive_004")
+
+    emitted = []
+    panel.skip_requested.connect(emitted.append)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+    )
+
+    panel._rows["a"].skip_btn.click()
+
+    assert emitted == ["drive_004"]
+
+
 # --- drive release ----------------------------------------------------------
 
 
