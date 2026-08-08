@@ -60,7 +60,11 @@ class OpticalTab(PipelineTab):
                 outcome.physical_label or "Disc (unlabeled)",
             )
 
-        worker = OpticalCaptureWorker(request, retries=self.context.settings.ddrescue_retries)
+        s = self.context.settings
+        worker = OpticalCaptureWorker(
+            request, retries=s.ddrescue_retries,
+            convert_dvd_video=s.convert_dvd_video, dvd_video_crf=s.dvd_video_crf,
+        )
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
         worker.map_progress.connect(self.bar.set_summary)

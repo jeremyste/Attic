@@ -52,6 +52,25 @@ class SettingsDialog(QDialog):
         dev.addRow("Optical device:", self.optical)
         dev.addRow("ddrescue retries:", self.retries)
 
+        self.convert_dvd_video = QCheckBox(
+            "Auto-convert DVD-Video (VIDEO_TS) discs to .mp4"
+        )
+        self.convert_dvd_video.setChecked(settings.convert_dvd_video)
+        self.convert_dvd_video.setToolTip(
+            "After extraction, detect a VIDEO_TS folder and transcode each "
+            "title into an ordinary .mp4 alongside it. Needs ffmpeg on PATH; "
+            "if it's missing, the raw VIDEO_TS copy is kept either way."
+        )
+        self.dvd_video_crf = QSpinBox()
+        self.dvd_video_crf.setRange(0, 51)
+        self.dvd_video_crf.setValue(settings.dvd_video_crf)
+        self.dvd_video_crf.setToolTip(
+            "x264 quality (CRF): lower = higher quality/larger file. 18 is "
+            "visually near-lossless; 23 is a typical 'good enough' default."
+        )
+        dev.addRow(self.convert_dvd_video)
+        dev.addRow("DVD video quality (CRF):", self.dvd_video_crf)
+
         # Floppy geometry
         self.cyls = QSpinBox()
         self.cyls.setRange(1, 100)
@@ -162,6 +181,8 @@ class SettingsDialog(QDialog):
             keep_raw_image=self.keep_raw.isChecked(),
             optical_device=self.optical.text().strip() or "/dev/sr0",
             ddrescue_retries=self.retries.value(),
+            convert_dvd_video=self.convert_dvd_video.isChecked(),
+            dvd_video_crf=self.dvd_video_crf.value(),
             floppy_cylinders=self.cyls.value(),
             floppy_heads=self.heads.value(),
             floppy_format=self.floppy_format.text().strip() or "ibm.scan",

@@ -30,6 +30,16 @@ class AppSettings:
     optical_device: str = "/dev/sr0"
     ddrescue_retries: int = 3
 
+    # DVD-Video (VIDEO_TS) discs: after normal extraction, detect the VIDEO_TS
+    # folder structure and transcode each title into an ordinary .mp4 (see
+    # attic.core.dvdvideo) so the result is directly watchable rather than a
+    # DVD-authoring folder. Needs ffmpeg on PATH; if missing, the raw VIDEO_TS
+    # copy from normal extraction is kept and nothing is transcoded.
+    convert_dvd_video: bool = True
+    # x264 CRF (quality/size tradeoff): lower is higher quality/larger file.
+    # 18 is visually near-lossless -- plenty for a home-video archive copy.
+    dvd_video_crf: int = 18
+
     # Floppy geometry (the track-grid dimensions)
     floppy_cylinders: int = 80
     floppy_heads: int = 2
