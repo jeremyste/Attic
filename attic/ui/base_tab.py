@@ -42,6 +42,16 @@ class PipelineTab(QWidget):
     def append_log(self, text: str) -> None:
         self.log_view.appendPlainText(text)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Switching to this tab re-shows the log view; Qt doesn't preserve a
+        # "was scrolled to bottom" intent across that, so it can land on
+        # whatever scroll position the widget happened to have internally
+        # rather than the most recent log lines. Force it back to the bottom
+        # every time the tab becomes visible.
+        scrollbar = self.log_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
     def set_stage(self, text: str) -> None:
         self.stage_label.setText(text)
 
