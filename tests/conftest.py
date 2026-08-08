@@ -100,6 +100,27 @@ def fake_run(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def _no_real_priv_helper(monkeypatch):
+    """Never let a test spawn a real ``pkexec``/privileged-helper subprocess.
+
+    ``run_privileged()`` (used by ``extract.py``'s mount/umount calls) falls
+    back to a one-off ``pkexec <argv>`` call -- captured by ``fake_run`` like
+    any other ``subprocess_util.run`` call -- whenever the persistent helper
+    can't be reached. Forcing "can't be reached" here means tests exercise
+    that documented fallback path deterministically instead of racing a real
+    pkexec/polkit prompt. ``run_ddrescue`` has no such fallback (ddrescue
+    always needs privilege); tests that reach it patch ``priv_client.start``
+    directly instead of relying on this fixture.
+    """
+    from attic.core import priv_client
+
+    def _unavailable():
+        raise priv_client.HelperUnavailable("no privileged helper in tests")
+
+    monkeypatch.setattr(priv_client._client, "ensure_running", _unavailable)
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """A single offscreen QApplication for widget-touching tests."""

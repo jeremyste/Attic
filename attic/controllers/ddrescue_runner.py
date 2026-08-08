@@ -1,10 +1,14 @@
 """Run ddrescue as a live subprocess while polling its mapfile for progress.
 
-``attic.core.subprocess_util.run`` is blocking (fine for quick tools). ddrescue,
-by contrast, runs for minutes/hours and we want live progress, so it is driven
-here with ``Popen`` while the mapfile it maintains is polled on an interval and
-parsed via ``core.ddrescue.parse_mapfile``. The mapfile doubles as the run's
-logfile and is always kept uncompressed.
+ddrescue needs root (raw device access) and runs for minutes/hours with live
+progress wanted, so it's driven through the persistent privileged helper
+(``core.priv_client``) rather than ``subprocess_util.run``'s blocking one-shot
+call. ``priv_client.start`` returns a Popen-alike (``RemoteProcessHandle``)
+that this module drives exactly like a local ``Popen`` -- ddrescue writes its
+own progress to the mapfile on disk, which is polled directly here (no need to
+relay anything through the helper). ``argv`` should be the bare ddrescue
+command, with no ``pkexec``/privilege prefix -- the helper is already root.
+The mapfile doubles as the run's logfile and is always kept uncompressed.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from ..core import priv_client
 from ..core.ddrescue import MapSummary, parse_mapfile
 
 
@@ -40,25 +45,20 @@ def run_ddrescue(
     real failure can be summarized. Returns a :class:`DdrescueOutcome`.
     """
     last: MapSummary | None = None
-    with open(stderr_path, "w", encoding="utf-8", errors="replace") as errfh:
-        proc = subprocess.Popen(
-            [str(a) for a in argv],
-            stdout=subprocess.DEVNULL,
-            stderr=errfh,
-        )
-        try:
-            while proc.poll() is None:
-                time.sleep(poll_interval)
-                if should_cancel and should_cancel():
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    break
-                last = _poll(mapfile_path, on_progress) or last
-        finally:
-            proc.wait()
+    proc = priv_client.start([str(a) for a in argv], stderr_path=stderr_path)
+    try:
+        while proc.poll() is None:
+            time.sleep(poll_interval)
+            if should_cancel and should_cancel():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                break
+            last = _poll(mapfile_path, on_progress) or last
+    finally:
+        proc.wait()
 
     # One final read after completion to capture the finished state.
     last = _poll(mapfile_path, on_progress) or last

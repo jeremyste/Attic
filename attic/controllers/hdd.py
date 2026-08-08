@@ -30,7 +30,6 @@ from ..core.ddrescue import build_ddrescue_argv
 from ..core.partition import PartitionInfo, enumerate_partitions
 from ..core.sanitize import sanitize_filename
 from ..core.staging import StagingDir
-from ..core.subprocess_util import with_pkexec
 from ..core import subprocess_util as su
 from .base import JobRequest, base_row
 from .ddrescue_runner import run_ddrescue
@@ -68,11 +67,9 @@ class HddRescueWorker(QThread):
 
     def run(self) -> None:
         self.stage.emit("Rescuing drive" if not self.first_pass else "Rescuing drive (first pass)")
-        argv = with_pkexec(
-            build_ddrescue_argv(
-                self.device, self.image_path, self.mapfile_path,
-                first_pass_only=self.first_pass, retries=self.retries,
-            )
+        argv = build_ddrescue_argv(
+            self.device, self.image_path, self.mapfile_path,
+            first_pass_only=self.first_pass, retries=self.retries,
         )
         self.log.emit(" ".join(argv))
         try:

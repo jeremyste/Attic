@@ -67,6 +67,19 @@ def with_pkexec(argv: Sequence[str]) -> list[str]:
     return ["pkexec", *[str(a) for a in argv]]
 
 
+def run_privileged(argv: Sequence[str], *, timeout: float | None = None) -> CmdResult:
+    """Run ``argv`` as root via the persistent privileged helper.
+
+    Authorized once at app startup (see ``priv_client.ensure_running``) rather
+    than once per call, which is what ``with_pkexec`` alone would trigger.
+    Falls back to a one-off ``pkexec`` call if the helper can't be reached
+    (e.g. a core function used directly, outside the app/CLI entry points).
+    """
+    from . import priv_client  # local import: priv_client imports from this module
+
+    return priv_client.run_with_fallback(argv, timeout=timeout)
+
+
 def run(
     argv: Sequence[str],
     *,
