@@ -49,8 +49,15 @@ class SettingsDialog(QDialog):
         self.retries.setRange(0, 20)
         self.retries.setValue(settings.ddrescue_retries)
         dev = QFormLayout()
+        self.eject_on_complete = QCheckBox("Eject the disc when imaging finishes")
+        self.eject_on_complete.setChecked(settings.eject_on_complete)
+        self.eject_on_complete.setToolTip(
+            "A physical cue that it's safe to pull the disc and load the "
+            "next one. Best-effort -- never fails the capture."
+        )
         dev.addRow("Optical device:", self.optical)
         dev.addRow("ddrescue retries:", self.retries)
+        dev.addRow(self.eject_on_complete)
 
         self.convert_dvd_video = QCheckBox(
             "Auto-convert DVD-Video (VIDEO_TS) discs to .mp4"
@@ -181,6 +188,7 @@ class SettingsDialog(QDialog):
             keep_raw_image=self.keep_raw.isChecked(),
             optical_device=self.optical.text().strip() or "/dev/sr0",
             ddrescue_retries=self.retries.value(),
+            eject_on_complete=self.eject_on_complete.isChecked(),
             convert_dvd_video=self.convert_dvd_video.isChecked(),
             dvd_video_crf=self.dvd_video_crf.value(),
             floppy_cylinders=self.cyls.value(),

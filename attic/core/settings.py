@@ -29,6 +29,11 @@ class AppSettings:
     # Devices
     optical_device: str = "/dev/sr0"
     ddrescue_retries: int = 3
+    # Eject the tray once ddrescue has finished imaging the disc -- a physical
+    # cue that it's safe to pull the disc and load the next one. Best-effort;
+    # a missing `eject` binary or a drive that doesn't support it never fails
+    # the capture.
+    eject_on_complete: bool = True
 
     # DVD-Video (VIDEO_TS) discs: after normal extraction, detect the VIDEO_TS
     # folder structure and transcode each title into an ordinary .mp4 (see

@@ -16,6 +16,7 @@ from PyQt6.QtCore import pyqtSignal
 from ..core import dvdvideo
 from ..core import extract as extract_mod
 from ..core import fsdetect
+from ..core import subprocess_util as su
 from ..core.config import EXTRACTED_DIRNAME, Status
 from ..core.datescan import scan_tree_date
 from ..core.ddrescue import MapSummary, build_ddrescue_argv
@@ -33,12 +34,14 @@ class OpticalCaptureWorker(CaptureWorker):
     def __init__(
         self, request, retries: int = 3, *,
         convert_dvd_video: bool = True, dvd_video_crf: int = 18,
+        eject_on_complete: bool = True,
         parent=None,
     ):
         super().__init__(request, parent)
         self.retries = retries
         self.convert_dvd_video = convert_dvd_video
         self.dvd_video_crf = dvd_video_crf
+        self.eject_on_complete = eject_on_complete
 
     def capture(self, staging: StagingDir) -> CaptureArtifacts:
         device = self.request.source_id or "/dev/sr0"
@@ -61,6 +64,8 @@ class OpticalCaptureWorker(CaptureWorker):
         # detection, extraction and compression are all host-side work, so the
         # next disc can be loaded while this one finishes processing.
         self.release_drive()
+        if self.eject_on_complete:
+            self._eject(device)
 
         if outcome.returncode != 0 and (outcome.last_summary is None
                                         or outcome.last_summary.rescued_bytes == 0):
@@ -151,6 +156,17 @@ class OpticalCaptureWorker(CaptureWorker):
             )
             return note, result.converted_count < len(result.titles)
         return f"DVD-Video: conversion failed -- {result.error_summary}", True
+
+    def _eject(self, device: str) -> None:
+        """Best-effort tray eject once the disc is safely imaged.
+
+        A physical cue that it's safe to pull the disc and load the next one
+        -- never lets an eject problem (no `eject` binary, permissions,
+        a slot-load drive that doesn't support it) affect the capture result.
+        """
+        result = su.run(["eject", device])
+        if not result.ok:
+            self.log.emit(f"Eject failed (non-fatal): {result.error_summary()}")
 
     def _emit_progress(self, summary: MapSummary) -> None:
         self.map_progress.emit(summary)

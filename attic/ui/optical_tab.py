@@ -64,6 +64,7 @@ class OpticalTab(PipelineTab):
         worker = OpticalCaptureWorker(
             request, retries=s.ddrescue_retries,
             convert_dvd_video=s.convert_dvd_video, dvd_video_crf=s.dvd_video_crf,
+            eject_on_complete=s.eject_on_complete,
         )
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
