@@ -65,6 +65,8 @@ class FloppyTab(PipelineTab):
             device=s.floppy_device,
             capture_flux=s.floppy_capture_flux,
             flux_revs=s.floppy_flux_revs,
+            retries=s.floppy_retries,
+            seek_retries=s.floppy_seek_retries,
         )
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)

@@ -82,10 +82,31 @@ class SettingsDialog(QDialog):
         self.flux_revs.setRange(0, 10)
         self.flux_revs.setSpecialValueText("format default")
         self.flux_revs.setValue(settings.floppy_flux_revs)
+        self.floppy_retries = QSpinBox()
+        self.floppy_retries.setRange(0, 50)
+        self.floppy_retries.setSpecialValueText("gw default (3)")
+        self.floppy_retries.setValue(settings.floppy_retries)
+        self.floppy_retries.setToolTip(
+            "In-place re-reads of a track before giving up on it. gw stops "
+            "retrying the moment a track fully succeeds, so this only costs "
+            "time on tracks that are already failing."
+        )
+        self.floppy_seek_retries = QSpinBox()
+        self.floppy_seek_retries.setRange(0, 10)
+        self.floppy_seek_retries.setSpecialValueText("gw default (off)")
+        self.floppy_seek_retries.setValue(settings.floppy_seek_retries)
+        self.floppy_seek_retries.setToolTip(
+            "Retract the head and re-seek before each retry, instead of just "
+            "re-reading in place -- a genuinely different recovery attempt "
+            "(can dislodge dust/debris), not just another chance at the same "
+            "read."
+        )
         flop.addRow("Disk format:", self.floppy_format)
         flop.addRow("Greaseweazle port:", self.floppy_device)
         flop.addRow(self.capture_flux)
         flop.addRow("Flux revolutions:", self.flux_revs)
+        flop.addRow("Track retries:", self.floppy_retries)
+        flop.addRow("Seek retries:", self.floppy_seek_retries)
 
         # Webcam
         self.camera = QSpinBox()
@@ -147,6 +168,8 @@ class SettingsDialog(QDialog):
             floppy_device=self.floppy_device.text().strip(),
             floppy_capture_flux=self.capture_flux.isChecked(),
             floppy_flux_revs=self.flux_revs.value(),
+            floppy_retries=self.floppy_retries.value(),
+            floppy_seek_retries=self.floppy_seek_retries.value(),
             camera_index=self.camera.value(),
             skip_photo=self.skip_photo.isChecked(),
             auto_accept_fallback_names=self.auto_accept.isChecked(),

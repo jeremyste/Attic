@@ -275,3 +275,65 @@ def test_flux_revs_zero_leaves_gw_on_the_format_default(monkeypatch, staging):
     ])
     worker.capture(staging)
     assert "--revs" not in seen[0]
+
+
+def test_convert_uses_corrected_format_when_scan_finds_a_short_track(
+    monkeypatch, staging,
+):
+    # Reproduces the real bug: c0.0 scans a sector short, everything else is
+    # a uniform 18 -- the convert step must be redone with a fixed format
+    # rather than trusting scan's per-track counts to build the .img.
+    flux, image = staging.child("floppy.scp"), staging.child("floppy.img")
+    read_lines = ["T0.0: IBM MFM (17/17 sectors) from 250kbps"] + [
+        f"T{c}.{h}: IBM MFM (18/18 sectors) from 250kbps"
+        for c in range(80) for h in (0, 1)
+        if not (c == 0 and h == 0)
+    ]
+    worker, seen = _flux_worker(monkeypatch, staging, [
+        (read_lines, _write(flux, 4096)),
+        (["Found 2878 sectors of 2880 (99%)"], _write(image)),
+    ])
+    monkeypatch.setattr(
+        "attic.controllers.floppy.fsdetect.detect_filesystem",
+        lambda *a, **k: _Det(fstype="vfat", recognized=True),
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.extract_mod.extract", lambda *a, **k: _ExtractOk()
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.scan_tree_date", lambda *a, **k: _Scan()
+    )
+
+    worker.capture(staging)
+
+    _read_cmd, convert_cmd = seen
+    assert convert_cmd[convert_cmd.index("--format") + 1] == "ibm.1440"
+
+
+def test_convert_keeps_scan_when_track_counts_are_already_uniform(
+    monkeypatch, staging,
+):
+    flux, image = staging.child("floppy.scp"), staging.child("floppy.img")
+    read_lines = [
+        f"T{c}.{h}: IBM MFM (18/18 sectors) from 250kbps"
+        for c in range(80) for h in (0, 1)
+    ]
+    worker, seen = _flux_worker(monkeypatch, staging, [
+        (read_lines, _write(flux, 4096)),
+        (["Found 2880 sectors of 2880 (100%)"], _write(image)),
+    ])
+    monkeypatch.setattr(
+        "attic.controllers.floppy.fsdetect.detect_filesystem",
+        lambda *a, **k: _Det(fstype="vfat", recognized=True),
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.extract_mod.extract", lambda *a, **k: _ExtractOk()
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.scan_tree_date", lambda *a, **k: _Scan()
+    )
+
+    worker.capture(staging)
+
+    _read_cmd, convert_cmd = seen
+    assert convert_cmd[convert_cmd.index("--format") + 1] == "ibm.scan"

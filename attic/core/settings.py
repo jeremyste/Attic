@@ -51,6 +51,17 @@ class AppSettings:
     # (2 for ibm.scan). More revolutions give a damaged track more independent
     # samples to recover from, at ~50% more storage per extra revolution.
     floppy_flux_revs: int = 0
+    # In-place re-reads of the same track before giving up on it. 0 uses gw's
+    # own default (3). gw stops retrying the moment a track fully succeeds, so
+    # raising this costs virtually nothing on a healthy disk -- it only adds
+    # time on tracks that are already failing, in exchange for more chances
+    # at a marginal (not permanently damaged) sector.
+    floppy_retries: int = 5
+    # Retract the head and re-seek before each retry, rather than re-reading
+    # in place. 0 uses gw's own default (0, i.e. off). Can dislodge dust/debris
+    # or land the head slightly differently -- a genuinely different recovery
+    # attempt than an in-place retry, not just another chance at the same read.
+    floppy_seek_retries: int = 2
 
     # Webcam
     camera_index: int = 0

@@ -2,7 +2,9 @@ from attic.controllers.floppy import (
     TRACK_CLEAN,
     TRACK_FAILED,
     TRACK_RETRIED,
+    TrackResult,
     build_gw_read_cmd,
+    infer_uniform_format,
     parse_gw_track_line,
 )
 
@@ -73,3 +75,64 @@ class TestBuildGwReadCmd:
 
     def test_device_omitted_when_blank(self):
         assert "--device" not in build_gw_read_cmd("/tmp/f.img", device="")
+
+    def test_retries_omitted_when_zero(self):
+        cmd = build_gw_read_cmd("/tmp/f.img", retries=0)
+        assert "--retries" not in cmd
+
+    def test_retries_passed_through(self):
+        cmd = build_gw_read_cmd("/tmp/f.img", retries=8)
+        assert cmd[cmd.index("--retries") + 1] == "8"
+
+    def test_seek_retries_omitted_when_zero(self):
+        cmd = build_gw_read_cmd("/tmp/f.img", seek_retries=0)
+        assert "--seek-retries" not in cmd
+
+    def test_seek_retries_passed_through(self):
+        cmd = build_gw_read_cmd("/tmp/f.img", seek_retries=2)
+        assert cmd[cmd.index("--seek-retries") + 1] == "2"
+
+
+def _tracks(*totals: int) -> dict[tuple[int, int], TrackResult]:
+    """Build a track_results dict of the shape infer_uniform_format expects,
+    one synthetic (cyl, 0) entry per total given."""
+    return {
+        (i, 0): TrackResult(cyl=i, head=0, status=TRACK_CLEAN, sectors_got=t, sectors_total=t)
+        for i, t in enumerate(totals)
+    }
+
+
+class TestInferUniformFormat:
+    def test_real_world_case_two_short_tracks_out_of_160(self):
+        # Reproduces the actual bug: c0h0 and c1h0 scanned as 17 sectors,
+        # every other one of 160 tracks scanned as the true 18.
+        totals = [17, 17] + [18] * 158
+        assert infer_uniform_format(_tracks(*totals), "ibm.scan") == "ibm.1440"
+
+    def test_no_override_when_already_uniform(self):
+        totals = [18] * 160
+        assert infer_uniform_format(_tracks(*totals), "ibm.scan") is None
+
+    def test_no_override_for_an_explicit_non_scan_format(self):
+        # The user already pinned geometry themselves -- nothing to correct.
+        totals = [17, 17] + [18] * 158
+        assert infer_uniform_format(_tracks(*totals), "ibm.1440") is None
+
+    def test_no_override_without_a_clear_majority(self):
+        # A genuinely mixed/exotic disk -- don't guess.
+        totals = [18] * 5 + [21] * 4
+        assert infer_uniform_format(_tracks(*totals), "ibm.scan") is None
+
+    def test_no_override_with_too_little_data(self):
+        assert infer_uniform_format(_tracks(18), "ibm.scan") is None
+        assert infer_uniform_format({}, "ibm.scan") is None
+
+    def test_zero_sector_tracks_are_ignored_not_counted_as_a_vote(self):
+        # Totally unreadable tracks (0/0) shouldn't dilute the majority.
+        totals = [17, 17] + [18] * 158 + [0] * 20
+        assert infer_uniform_format(_tracks(*totals), "ibm.scan") == "ibm.1440"
+
+    def test_unmapped_majority_falls_back_to_no_override(self):
+        # A majority exists but doesn't match any known standard secs count.
+        totals = [17] * 3 + [23] * 20
+        assert infer_uniform_format(_tracks(*totals), "ibm.scan") is None
