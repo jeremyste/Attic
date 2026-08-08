@@ -207,6 +207,39 @@ def rename_item(
     return changed
 
 
+def update_row(
+    working_folder: str, media_type: str, chosen_name: str, **fields: str,
+) -> int:
+    """Update columns on every row matching ``(media_type, chosen_name)``.
+
+    Same "read all rows, mutate matches, rewrite the file" pattern as
+    :func:`rename_item` (covers all partition rows of a multi-partition HDD
+    the same way). ``fields`` keys must be valid catalog columns. Returns the
+    number of rows changed.
+    """
+    bad = set(fields) - set(COLUMNS)
+    if bad:
+        raise ValueError(f"not a catalog column: {sorted(bad)}")
+    path = catalog_path(working_folder)
+    changed = 0
+    with _write_lock:
+        if not os.path.exists(path):
+            return 0
+        with open(path, newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        for row in rows:
+            if row.get("media_type") == media_type and row.get("chosen_name") == chosen_name:
+                for key, value in fields.items():
+                    row[key] = _to_str(value)
+                changed += 1
+        if changed:
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=COLUMNS)
+                writer.writeheader()
+                writer.writerows(rows)
+    return changed
+
+
 def highest_sequence(working_folder: str, media_type: str) -> int:
     """Highest ``sequence_number`` recorded for ``media_type`` (0 if none).
 

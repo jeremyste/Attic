@@ -1,6 +1,8 @@
 import csv
 import threading
 
+import pytest
+
 from attic.core.catalog import (
     COLUMNS,
     CatalogRow,
@@ -10,6 +12,7 @@ from attic.core.catalog import (
     existing_chosen_names,
     highest_sequence,
     read_rows,
+    update_row,
 )
 
 
@@ -132,6 +135,62 @@ def test_older_catalog_header_is_widened_on_append(tmp_path):
     # ...and the new value is reachable by name rather than stranded past the end.
     assert rows[1]["flux_filename"] == "NewDisk.scp.zst"
     assert None not in rows[1]
+
+
+def test_update_row_changes_matching_rows(tmp_path):
+    append_rows(
+        str(tmp_path),
+        [
+            CatalogRow(media_type="disc", chosen_name="Classic_ Rock", status="partial",
+                       error_summary="pkexec dismissed"),
+            CatalogRow(media_type="floppy", chosen_name="Classic_ Rock", status="ok"),
+        ],
+    )
+    changed = update_row(
+        str(tmp_path), "disc", "Classic_ Rock",
+        status="ok", error_summary="", notes="reextract: 42 file(s)",
+    )
+    assert changed == 1
+    rows = read_rows(str(tmp_path))
+    disc_row = next(r for r in rows if r["media_type"] == "disc")
+    floppy_row = next(r for r in rows if r["media_type"] == "floppy")
+    assert disc_row["status"] == "ok"
+    assert disc_row["error_summary"] == ""
+    assert disc_row["notes"] == "reextract: 42 file(s)"
+    # A same-named row of a *different* media type must be untouched.
+    assert floppy_row["status"] == "ok"
+    assert floppy_row["notes"] == ""
+
+
+def test_update_row_multiple_matches_all_updated(tmp_path):
+    # Multi-partition HDD: several rows share one chosen_name.
+    append_rows(
+        str(tmp_path),
+        [
+            CatalogRow(media_type="hdd", chosen_name="Maxtor 80GB", partition_label="System",
+                       status="partial"),
+            CatalogRow(media_type="hdd", chosen_name="Maxtor 80GB", partition_label="Data",
+                       status="partial"),
+        ],
+    )
+    changed = update_row(str(tmp_path), "hdd", "Maxtor 80GB", status="ok")
+    assert changed == 2
+    assert {r["status"] for r in read_rows(str(tmp_path))} == {"ok"}
+
+
+def test_update_row_no_match_returns_zero(tmp_path):
+    append_rows(str(tmp_path), [CatalogRow(media_type="disc", chosen_name="Other")])
+    assert update_row(str(tmp_path), "disc", "Nonexistent", status="ok") == 0
+
+
+def test_update_row_no_catalog_returns_zero(tmp_path):
+    assert update_row(str(tmp_path), "disc", "X", status="ok") == 0
+
+
+def test_update_row_rejects_unknown_column(tmp_path):
+    append_rows(str(tmp_path), [CatalogRow(media_type="disc", chosen_name="X")])
+    with pytest.raises(ValueError):
+        update_row(str(tmp_path), "disc", "X", not_a_real_column="oops")
 
 
 def test_unrecognized_header_is_left_alone(tmp_path):
