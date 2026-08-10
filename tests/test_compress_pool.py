@@ -21,11 +21,12 @@ from attic.controllers.compress_pool import (
     FinalizeRequest,
     _FinalizeTask,
     _JobControl,
+    _read_and_extraction_are_clean,
     _Signals,
 )
 from attic.core.catalog import CatalogRow, read_rows
 from attic.core.config import MediaType, Status
-from attic.core.staging import create_staging
+from attic.core.staging import StagingDir, create_staging
 from attic.core.subprocess_util import CmdResult
 
 
@@ -36,18 +37,25 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _staged_request(tmp_path, *, with_image=True, status=Status.OK):
+def _staged_request(
+    tmp_path, *, with_image=True, status=Status.OK, media_type=MediaType.HDD,
+    read_bad_bytes="", skip_image_when_clean=False,
+):
     working_folder = str(tmp_path)
-    st = create_staging(working_folder, MediaType.HDD, "sess1")
+    st = create_staging(working_folder, media_type, "sess1")
     raw_image_path = ""
     if with_image:
         raw_image_path = st.child("raw.img")
         with open(raw_image_path, "wb") as fh:
             fh.write(b"x" * 1000)
-    rows = [CatalogRow(media_type="hdd", chosen_name="drive_001", status=status.value)]
+    rows = [CatalogRow(
+        media_type=media_type.value, chosen_name="drive_001", status=status.value,
+        read_bad_bytes=read_bad_bytes,
+    )]
     req = FinalizeRequest(
-        working_folder=working_folder, media_type=MediaType.HDD, staging=st,
+        working_folder=working_folder, media_type=media_type, staging=st,
         raw_image_path=raw_image_path, chosen_name="drive_001", rows=rows,
+        skip_image_when_clean=skip_image_when_clean,
     )
     return req, st
 
@@ -196,3 +204,144 @@ def test_skip_mid_compression_falls_back_to_raw(tmp_path, qapp, monkeypatch, fak
     final_dir, rows = done[0]
     assert rows[0].compressed_image_filename == "drive_001.img"
     assert os.path.exists(os.path.join(final_dir, "drive_001.img"))
+
+
+# --- auto-skip image when clean ---------------------------------------------
+
+
+def _bare_request(media_type, rows):
+    return FinalizeRequest(
+        working_folder="/unused",
+        media_type=media_type,
+        staging=StagingDir("/unused", media_type, "s"),
+        raw_image_path="",
+        chosen_name="x",
+        rows=rows,
+    )
+
+
+def test_clean_check_true_for_hdd_all_ok_and_zero_bad_bytes():
+    rows = [
+        CatalogRow(media_type="hdd", status=Status.OK.value, read_bad_bytes="0"),
+        CatalogRow(media_type="hdd", status=Status.OK.value, read_bad_bytes="0"),
+    ]
+    assert _read_and_extraction_are_clean(_bare_request(MediaType.HDD, rows))
+
+
+def test_clean_check_false_for_hdd_with_bad_bytes():
+    rows = [CatalogRow(media_type="hdd", status=Status.OK.value, read_bad_bytes="12")]
+    assert not _read_and_extraction_are_clean(_bare_request(MediaType.HDD, rows))
+
+
+def test_clean_check_false_for_hdd_with_blank_read_bad_bytes():
+    # Blank means "unrecorded", not "known clean" -- must not be treated as safe.
+    rows = [CatalogRow(media_type="hdd", status=Status.OK.value, read_bad_bytes="")]
+    assert not _read_and_extraction_are_clean(_bare_request(MediaType.HDD, rows))
+
+
+def test_clean_check_false_for_hdd_with_one_bad_partition():
+    rows = [
+        CatalogRow(media_type="hdd", status=Status.OK.value, read_bad_bytes="0"),
+        CatalogRow(media_type="hdd", status=Status.PARTIAL.value, read_bad_bytes="0"),
+    ]
+    assert not _read_and_extraction_are_clean(_bare_request(MediaType.HDD, rows))
+
+
+def test_clean_check_true_for_optical_ok_status_alone():
+    # Optical's own status already folds in a clean ddrescue read + full
+    # extraction -- no read_bad_bytes column needed for it.
+    rows = [CatalogRow(media_type="disc", status=Status.OK.value)]
+    assert _read_and_extraction_are_clean(_bare_request(MediaType.OPTICAL, rows))
+
+
+def test_clean_check_false_for_optical_partial():
+    rows = [CatalogRow(media_type="disc", status=Status.PARTIAL.value)]
+    assert not _read_and_extraction_are_clean(_bare_request(MediaType.OPTICAL, rows))
+
+
+def test_clean_check_false_for_no_rows():
+    assert not _read_and_extraction_are_clean(_bare_request(MediaType.HDD, []))
+
+
+def test_skip_image_when_clean_discards_hdd_image_without_compressing(
+    tmp_path, qapp, fake_run,
+):
+    req, st = _staged_request(
+        tmp_path, status=Status.OK, read_bad_bytes="0", skip_image_when_clean=True,
+    )
+    signals = _Signals()
+    done = []
+    signals.done.connect(lambda d, rows: done.append((d, rows)))
+    control = _JobControl()
+    task = _FinalizeTask(req, signals, control)
+
+    task.run()
+
+    assert not fake_run.ran("zstd")  # compression never even attempted
+    assert len(done) == 1
+    final_dir, rows = done[0]
+    assert rows[0].status == Status.OK.value
+    assert rows[0].raw_image_filename == ""
+    assert rows[0].compressed_image_filename == ""
+    assert rows[0].raw_size_bytes == "1000"
+    assert "not archived" in rows[0].notes.lower()
+    assert not os.path.exists(os.path.join(final_dir, "drive_001.img"))
+    assert not os.path.exists(os.path.join(final_dir, "drive_001.img.zst"))
+    assert os.path.isdir(final_dir)
+
+
+def test_skip_image_when_clean_discards_optical_image(tmp_path, qapp, fake_run):
+    req, st = _staged_request(
+        tmp_path, media_type=MediaType.OPTICAL, status=Status.OK,
+        skip_image_when_clean=True,
+    )
+    signals = _Signals()
+    done = []
+    signals.done.connect(lambda d, rows: done.append((d, rows)))
+    control = _JobControl()
+    task = _FinalizeTask(req, signals, control)
+
+    task.run()
+
+    assert not fake_run.ran("zstd")
+    assert len(done) == 1
+    _final_dir, rows = done[0]
+    assert rows[0].raw_image_filename == ""
+    assert rows[0].compressed_image_filename == ""
+
+
+def test_skip_image_when_clean_does_not_apply_to_partial_reads(tmp_path, qapp):
+    # Real zstd/sha256sum, small file -- same style as test_flux_finalize.py.
+    req, st = _staged_request(
+        tmp_path, status=Status.PARTIAL, read_bad_bytes="512",
+        skip_image_when_clean=True,
+    )
+    signals = _Signals()
+    done = []
+    signals.done.connect(lambda d, rows: done.append((d, rows)))
+    control = _JobControl()
+    task = _FinalizeTask(req, signals, control)
+
+    task.run()
+
+    # Not clean enough to skip -- compression ran as normal.
+    assert len(done) == 1
+    final_dir, rows = done[0]
+    assert rows[0].compressed_image_filename == "drive_001.img.zst"
+    assert os.path.isfile(os.path.join(final_dir, "drive_001.img.zst"))
+
+
+def test_skip_image_when_clean_off_by_default_still_compresses(tmp_path, qapp):
+    req, st = _staged_request(tmp_path, status=Status.OK, read_bad_bytes="0")
+    signals = _Signals()
+    done = []
+    signals.done.connect(lambda d, rows: done.append((d, rows)))
+    control = _JobControl()
+    task = _FinalizeTask(req, signals, control)
+
+    task.run()
+
+    assert len(done) == 1
+    final_dir, rows = done[0]
+    assert rows[0].compressed_image_filename == "drive_001.img.zst"
+    assert os.path.isfile(os.path.join(final_dir, "drive_001.img.zst"))

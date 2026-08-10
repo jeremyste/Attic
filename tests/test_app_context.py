@@ -45,7 +45,7 @@ def test_unlabeled_volume_finalizes_and_queues_pending(qapp, tmp_path):
     wf = str(tmp_path)
     ctx, panel = _make_context(qapp, wf)
     staging = create_staging(wf, MediaType.FLOPPY, "s1")
-    request = JobRequest(working_folder=wf, media_type=MediaType.FLOPPY, source_id="floppy")
+    request = JobRequest(staging_root=wf, media_type=MediaType.FLOPPY, source_id="floppy")
     artifacts = CaptureArtifacts(
         raw_image_path=staging.child("floppy.img"),
         detected_label="",  # unlabeled
@@ -74,7 +74,7 @@ def test_auto_accept_skips_pending_queue(qapp, tmp_path):
     wf = str(tmp_path)
     ctx, panel = _make_context(qapp, wf, settings=AppSettings(auto_accept_fallback_names=True))
     staging = create_staging(wf, MediaType.FLOPPY, "s1")
-    request = JobRequest(working_folder=wf, media_type=MediaType.FLOPPY, source_id="floppy")
+    request = JobRequest(staging_root=wf, media_type=MediaType.FLOPPY, source_id="floppy")
     artifacts = CaptureArtifacts(
         raw_image_path=staging.child("floppy.img"),
         detected_label="", fallback_date="1999-05-05",
@@ -99,7 +99,7 @@ def test_settings_flow_into_finalize_request(qapp, tmp_path):
         auto_accept_fallback_names=True,
     ))
     staging = create_staging(wf, MediaType.OPTICAL, "s1")
-    request = JobRequest(working_folder=wf, media_type=MediaType.OPTICAL, source_id="/dev/sr0")
+    request = JobRequest(staging_root=wf, media_type=MediaType.OPTICAL, source_id="/dev/sr0")
     artifacts = CaptureArtifacts(
         raw_image_path=staging.child("disc.img"), status=Status.OK, filesystem_detected="iso9660",
     )
@@ -114,7 +114,7 @@ def test_capture_failure_records_failed_row_no_finalize(qapp, tmp_path):
     wf = str(tmp_path)
     ctx, _panel = _make_context(qapp, wf)
     staging = create_staging(wf, MediaType.OPTICAL, "s1")
-    request = JobRequest(working_folder=wf, media_type=MediaType.OPTICAL, source_id="/dev/sr0")
+    request = JobRequest(staging_root=wf, media_type=MediaType.OPTICAL, source_id="/dev/sr0")
     artifacts = CaptureArtifacts(
         raw_image_path=staging.child("disc.img"),
         status=Status.FAILED,
@@ -176,7 +176,7 @@ def test_unattended_naming_never_opens_a_dialog(qapp, tmp_path, monkeypatch):
     )
     staging = create_staging(wf, MediaType.FLOPPY, "s1")
     request = JobRequest(
-        working_folder=wf, media_type=MediaType.FLOPPY,
+        staging_root=wf, media_type=MediaType.FLOPPY,
         physical_label="test2", source_id="floppy",
     )
     artifacts = CaptureArtifacts(
@@ -212,7 +212,7 @@ def test_naming_dialog_still_shown_when_not_unattended(qapp, tmp_path, monkeypat
     )
     staging = create_staging(wf, MediaType.FLOPPY, "s1")
     request = JobRequest(
-        working_folder=wf, media_type=MediaType.FLOPPY,
+        staging_root=wf, media_type=MediaType.FLOPPY,
         physical_label="test2", source_id="floppy",
     )
     ctx.route_single(request, staging, CaptureArtifacts(

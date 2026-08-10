@@ -1,8 +1,10 @@
+import errno
 import os
 from datetime import datetime
 
 import pytest
 
+import attic.core.staging as staging_mod
 from attic.core.config import MediaType, TMP_DIRNAME
 from attic.core.staging import (
     create_staging,
@@ -11,6 +13,18 @@ from attic.core.staging import (
     new_session_id,
     promote,
 )
+
+
+def _fake_exdev_replace(blocked_src):
+    """An os.replace stand-in that raises EXDEV only for ``blocked_src``."""
+    real_replace = os.replace
+
+    def fake(src, dst):
+        if src == blocked_src:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_replace(src, dst)
+
+    return fake
 
 
 def test_session_id_format_and_uniqueness():
@@ -95,7 +109,7 @@ def test_failure_leaves_staging_in_place(tmp_path):
     with open(staging.child("partial.img"), "w") as fh:
         fh.write("half")
     assert staging.exists()
-    assert staging.rel_path() == os.path.join(TMP_DIRNAME, "hdd", "boom")
+    assert staging.path == os.path.join(str(tmp_path), TMP_DIRNAME, "hdd", "boom")
 
 
 def test_discard_removes_staging(tmp_path):
@@ -103,3 +117,61 @@ def test_discard_removes_staging(tmp_path):
     staging = create_staging(wf, MediaType.FLOPPY, "gone")
     discard(staging)
     assert not staging.exists()
+
+
+def test_promote_falls_back_to_copy_across_devices(tmp_path, monkeypatch):
+    staging_root = str(tmp_path / "staging")
+    archive_root = str(tmp_path / "archive")
+    staging = create_staging(staging_root, MediaType.OPTICAL, "s1")
+    with open(staging.child("disc.img.zst"), "w") as fh:
+        fh.write("data")
+    os.makedirs(staging.child("Extracted Files"))
+    with open(staging.child("Extracted Files", "a.txt"), "w") as fh:
+        fh.write("hello")
+
+    monkeypatch.setattr(os, "replace", _fake_exdev_replace(staging.path))
+
+    dest = final_dir(archive_root, MediaType.OPTICAL, "Backup")
+    result = promote(staging, dest)
+
+    assert result == dest
+    assert os.path.isfile(os.path.join(dest, "disc.img.zst"))
+    assert os.path.isfile(os.path.join(dest, "Extracted Files", "a.txt"))
+    # Staging is gone, including the now-empty .tmp tree under staging_root...
+    assert not os.path.exists(staging.path)
+    assert not os.path.exists(os.path.join(staging_root, TMP_DIRNAME))
+    # ...and nothing was ever created under the (different) staging_root inside
+    # the archive tree.
+    assert not os.path.exists(os.path.join(archive_root, TMP_DIRNAME))
+
+
+def test_promote_cross_device_verification_failure_leaves_staging(tmp_path, monkeypatch):
+    staging_root = str(tmp_path / "staging")
+    archive_root = str(tmp_path / "archive")
+    staging = create_staging(staging_root, MediaType.OPTICAL, "s1")
+    with open(staging.child("disc.img.zst"), "w") as fh:
+        fh.write("data")
+
+    monkeypatch.setattr(os, "replace", _fake_exdev_replace(staging.path))
+
+    # Force the post-copy verification to see a mismatched destination, as if
+    # the copy came up short.
+    real_stats = staging_mod._tree_stats
+    calls = {"n": 0}
+
+    def fake_stats(root):
+        calls["n"] += 1
+        if calls["n"] == 2:  # first call is the source, second the copy
+            return (999, 999999)
+        return real_stats(root)
+
+    monkeypatch.setattr(staging_mod, "_tree_stats", fake_stats)
+
+    dest = final_dir(archive_root, MediaType.OPTICAL, "Backup")
+    with pytest.raises(OSError):
+        promote(staging, dest)
+
+    # Nothing was silently lost: staging survives for inspection, and the
+    # incomplete copy at dest was cleaned up rather than left half-written.
+    assert staging.exists()
+    assert not os.path.exists(dest)

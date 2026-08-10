@@ -8,7 +8,8 @@ pass" / "Accept and continue" choice -> on accept, partition extraction ->
 naming + finalize. A legacy device-first order is available via a setting.
 
 Only removable/USB whole disks are listed by default (core.devices enforces the
-hard internal/boot-disk filter); an explicit override can surface all disks
+hard internal/boot-disk filter, and also excludes whichever drive currently
+hosts the working folder's archive); an explicit override can surface all disks
 behind warnings.
 """
 
@@ -91,17 +92,19 @@ class HddTab(PipelineTab):
             QMessageBox.warning(
                 self, "Show all drives",
                 "You are enabling ALL drives, including this computer's own "
-                "internal and system disks.\n\nImaging the wrong drive can make "
-                "your system unbootable. Non-removable drives are marked with ⚠ "
-                "and require an extra confirmation.",
+                "internal and system disks, and the drive currently hosting "
+                "the archive itself.\n\nImaging the wrong drive can make your "
+                "system unbootable, or overwrite your own archive. Flagged "
+                "drives are marked with ⚠ and require an extra confirmation.",
             )
         self.refresh_devices()
 
     def refresh_devices(self) -> None:
+        archive_disk = devices.host_disk_path(self.context.session.working_folder)
         if self.show_all_check.isChecked():
-            self._devices = devices.list_all_devices()
+            self._devices = devices.list_all_devices(archive_disk_path=archive_disk)
         else:
-            self._devices = devices.list_removable_devices()
+            self._devices = devices.list_removable_devices(archive_disk_path=archive_disk)
         self.device_combo.clear()
         for d in self._devices:
             self.device_combo.addItem(d.label, d)
@@ -125,14 +128,14 @@ class HddTab(PipelineTab):
             return
 
         self._request = JobRequest(
-            working_folder=self.context.session.working_folder,
+            staging_root=self.context.staging_root,
             media_type=MediaType.HDD,
             physical_label=outcome.physical_label,
             source_id=device.path,
             photos=outcome.photos,
         )
         self._staging = staging.create_staging(
-            self._request.working_folder, MediaType.HDD, self._request.session_id
+            self._request.staging_root, MediaType.HDD, self._request.session_id
         )
         self._image_path = self._staging.child("drive.img")
         self._log_path = self._staging.child("drive.log")
@@ -156,7 +159,10 @@ class HddTab(PipelineTab):
             return None, None
         from .device_dialog import DeviceSelectionDialog
 
-        dlg = DeviceSelectionDialog(self, show_all=self.show_all_check.isChecked())
+        dlg = DeviceSelectionDialog(
+            self, show_all=self.show_all_check.isChecked(),
+            working_folder=self.context.session.working_folder,
+        )
         if not dlg.exec():
             return None, None
         device = dlg.selected_device()

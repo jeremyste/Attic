@@ -232,7 +232,7 @@ def test_drive_is_released_before_decode_not_after(qapp, tmp_path, monkeypatch):
     )
 
     worker = FloppyCaptureWorker(
-        JobRequest(working_folder="/unused", media_type=MediaType.FLOPPY),
+        JobRequest(staging_root="/unused", media_type=MediaType.FLOPPY),
         capture_flux=True,
     )
     worker.drive_released.connect(lambda: events.append("released"))
@@ -250,7 +250,7 @@ def test_drive_release_is_emitted_once(qapp, tmp_path, monkeypatch):
         lambda cmd, **kw: _FakeProc(["Command Failed: GetFluxStatus: No Index"]),
     )
     worker = FloppyCaptureWorker(
-        JobRequest(working_folder="/unused", media_type=MediaType.FLOPPY),
+        JobRequest(staging_root="/unused", media_type=MediaType.FLOPPY),
         capture_flux=True,
     )
     count = []

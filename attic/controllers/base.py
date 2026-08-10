@@ -36,7 +36,11 @@ from ..core.staging import StagingDir
 class JobRequest:
     """Everything a capture job needs, gathered before the read starts."""
 
-    working_folder: str
+    # Local scratch location for this job's staging dir -- see
+    # AppSettings.staging_root. NOT the archive's working folder; the finalize
+    # step (AppContext.route_*) reads the working folder from the session
+    # instead, since staging and archive are independently configured.
+    staging_root: str
     media_type: MediaType
     physical_label: str = ""
     source_id: str = ""  # device path, or "floppy"/"disc"
@@ -120,7 +124,7 @@ class CaptureWorker(QThread):
     def run(self) -> None:  # noqa: D401 - QThread entry point
         try:
             self.staging = staging.create_staging(
-                self.request.working_folder,
+                self.request.staging_root,
                 self.request.media_type,
                 self.request.session_id,
             )

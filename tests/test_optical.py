@@ -42,7 +42,7 @@ def _worker(monkeypatch, *, eject_on_complete=True, bad_bytes=0):
         optical_mod.fsdetect, "detect_filesystem",
         lambda *a, **k: FsDetection(fstype="", label="", recognized=False, method="test"),
     )
-    request = JobRequest(working_folder="/unused", media_type=MediaType.OPTICAL)
+    request = JobRequest(staging_root="/unused", media_type=MediaType.OPTICAL)
     return OpticalCaptureWorker(request, eject_on_complete=eject_on_complete)
 
 
@@ -91,7 +91,7 @@ def test_ejects_the_requested_device(monkeypatch, fake_run, staging):
         lambda *a, **k: FsDetection(fstype="", label="", recognized=False, method="test"),
     )
     request = JobRequest(
-        working_folder="/unused", media_type=MediaType.OPTICAL, source_id="/dev/sr1",
+        staging_root="/unused", media_type=MediaType.OPTICAL, source_id="/dev/sr1",
     )
     worker = OpticalCaptureWorker(request, eject_on_complete=True)
 

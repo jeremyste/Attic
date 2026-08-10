@@ -1,6 +1,7 @@
 import json
 
 from attic.core.devices import (
+    host_disk_path,
     list_all_devices,
     list_removable_devices,
     parse_lsblk,
@@ -132,3 +133,62 @@ def test_list_all_devices_uses_override(fake_run):
     devs = list_all_devices()
     assert len(devs) == 4
     assert sum(1 for d in devs if d.eligible) == 1
+
+
+# --- archive-drive exclusion ------------------------------------------------
+
+
+def test_archive_disk_excluded_from_default_listing():
+    # /dev/sdb was the sole eligible (USB, non-system) disk in SAMPLE; marking
+    # it as the archive's own drive must drop it from the default listing too.
+    devs = parse_lsblk(SAMPLE, archive_disk_path="/dev/sdb")
+    assert devs == []
+
+
+def test_archive_disk_flagged_not_eligible_when_shown():
+    by_path = {
+        d.path: d
+        for d in parse_lsblk(SAMPLE, include_ineligible=True, archive_disk_path="/dev/sdb")
+    }
+    sdb = by_path["/dev/sdb"]
+    assert sdb.hosts_archive
+    assert not sdb.eligible
+    assert "archive" in sdb.warning
+    assert sdb.label.startswith("⚠")
+    # A disk that isn't the archive's own drive is untouched.
+    assert not by_path["/dev/sdc"].hosts_archive
+
+
+def test_blank_archive_disk_path_matches_nothing():
+    devs = parse_lsblk(SAMPLE, archive_disk_path="")
+    assert [d.path for d in devs] == ["/dev/sdb"]
+
+
+def test_list_removable_devices_excludes_archive_disk(fake_run):
+    fake_run.when("lsblk -J -O", stdout=SAMPLE)
+    assert list_removable_devices(archive_disk_path="/dev/sdb") == []
+    assert list_removable_devices(archive_disk_path="/dev/sdc") == parse_lsblk(SAMPLE)
+
+
+def test_host_disk_path_resolves_partition_to_parent_disk(fake_run):
+    fake_run.when("findmnt", stdout="/dev/sdb1\n")
+    fake_run.when("PKNAME", stdout="sdb\n")
+    assert host_disk_path("/media/jeremy/My Passport") == "/dev/sdb"
+    assert fake_run.ran("findmnt -no SOURCE --target")
+
+
+def test_host_disk_path_handles_whole_disk_source(fake_run):
+    fake_run.when("findmnt", stdout="/dev/sdb\n")
+    fake_run.when("PKNAME", stdout="\n")  # no parent -- source is already whole-disk
+    assert host_disk_path("/mnt/whole") == "/dev/sdb"
+
+
+def test_host_disk_path_empty_when_findmnt_fails(fake_run):
+    fake_run.when("findmnt", returncode=1, stderr="not a mountpoint")
+    assert host_disk_path("/nonexistent") == ""
+
+
+def test_host_disk_path_empty_for_non_dev_source(fake_run):
+    # e.g. a tmpfs/overlay root with no real block device backing it.
+    fake_run.when("findmnt", stdout="tmpfs\n")
+    assert host_disk_path("/") == ""

@@ -42,12 +42,29 @@ class AppContext:
     # chosen_name -> PendingItem to add to the panel once finalize completes.
     _pending_after: dict[str, PendingItem] = field(default_factory=dict)
 
+    @property
+    def staging_root(self) -> str:
+        """Local scratch location for new capture jobs (see AppSettings.staging_root)."""
+        return self.settings.resolved_staging_root()
+
+    # Per media type, whether a fully clean + fully extracted job should skip
+    # archiving any image at all. Floppy is deliberately absent: its image (or
+    # flux) is small and is the master worth always keeping, since re-imaging
+    # fragile physical media may not be possible later -- the opposite
+    # tradeoff from a large HDD/optical image that's genuinely redundant with
+    # a clean extraction.
     def _finalize_request(self, **kwargs) -> FinalizeRequest:
         """Build a FinalizeRequest with compression options from settings."""
+        media_type = kwargs.get("media_type")
+        skip_when_clean = {
+            MediaType.HDD: self.settings.hdd_auto_skip_image_when_clean,
+            MediaType.OPTICAL: self.settings.optical_auto_skip_image_when_clean,
+        }.get(media_type, False)
         return FinalizeRequest(
             keep_raw=self.settings.keep_raw_image,
             zstd_level=self.settings.zstd_level,
             zstd_long=self.settings.zstd_long,
+            skip_image_when_clean=skip_when_clean,
             **kwargs,
         )
 
@@ -204,7 +221,10 @@ class AppContext:
     def _record_capture_failure(
         self, request: JobRequest, staging: StagingDir, artifacts: CaptureArtifacts
     ) -> None:
-        note = f"Temp dir left for inspection: {staging.rel_path()}"
+        # Absolute, not staging.rel_path(): staging now lives under its own
+        # staging_root, which may not be anywhere near the working folder this
+        # note gets written into.
+        note = f"Temp dir left for inspection: {staging.path}"
         if self.processing_panel is not None:
             self.processing_panel.finish_job(
                 request.session_id,

@@ -46,7 +46,7 @@ class FloppyTab(PipelineTab):
         self.set_stage("Starting…")
 
         request = JobRequest(
-            working_folder=self.context.session.working_folder,
+            staging_root=self.context.staging_root,
             media_type=MediaType.FLOPPY,
             physical_label=outcome.physical_label,
             source_id="floppy",
@@ -62,6 +62,7 @@ class FloppyTab(PipelineTab):
         worker = FloppyCaptureWorker(
             request,
             disk_format=s.floppy_format,
+            format_fallbacks=s.floppy_format_fallbacks,
             device=s.floppy_device,
             capture_flux=s.floppy_capture_flux,
             flux_revs=s.floppy_flux_revs,

@@ -6,6 +6,15 @@ a per-track signal so the cylinder×head grid widget can update live. After the
 read we run the shared filesystem-detection chain (don't assume FAT12 — these
 disks span DOS through Windows XP era) and extract if recognized.
 
+Flux capture is format-agnostic (the physical read doesn't care whether the
+disk is IBM MFM, Amiga AmigaDOS, Atari ST, or something else), so decoding
+that flux into a sector image is where format actually matters. See
+``_decode_flux``: it tries the configured format plus any configured
+fallbacks entirely host-side against the already-captured flux, and keeps
+whichever candidate recovered the most sectors -- one physical pass over the
+drive can still end up correctly decoded even when the disk isn't the
+IBM-family format ``floppy_format`` defaults to.
+
 Two things about gw are load-bearing here and were verified against a real
 Greaseweazle V4.1 (host tools 1.23, firmware 1.6):
 
@@ -141,6 +150,44 @@ def _nonempty(path: str) -> bool:
         return False
 
 
+def _remove_quiet(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def candidate_formats(primary: str, fallbacks: str) -> list[str]:
+    """Ordered, de-duplicated gw ``--format`` profiles: ``primary`` first, then
+    each comma-separated entry in ``fallbacks`` (AppSettings.floppy_format_fallbacks)
+    that isn't already covered."""
+    primary = primary.strip() or "ibm.scan"
+    extra = [f.strip() for f in fallbacks.split(",") if f.strip()]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for fmt in (primary, *extra):
+        key = fmt.casefold()
+        if key not in seen:
+            seen.add(key)
+            ordered.append(fmt)
+    return ordered
+
+
+def _decode_score(run: "_GwRun") -> tuple[int, int]:
+    """``(sectors recovered, clean tracks)`` -- higher is a better flux decode.
+
+    Different disk families (IBM MFM vs. Amiga AmigaDOS vs. Atari ST, ...) use
+    fundamentally different flux encodings, so decoding one family's flux with
+    another family's format profile isn't a near-miss -- it either finds the
+    right sync patterns and recovers real sectors, or it doesn't. Total sectors
+    recovered (falling back to clean-track count to break ties) is enough to
+    tell a genuine decode apart from noise.
+    """
+    sectors = sum(tr.sectors_got for tr in run.track_results.values())
+    clean = sum(1 for tr in run.track_results.values() if tr.status == TRACK_CLEAN)
+    return (sectors, clean)
+
+
 def build_gw_read_cmd(
     out_path: str, *, disk_format: str = "ibm.scan", device: str = "",
     raw: bool = False, revs: int = 0, retries: int = 0, seek_retries: int = 0,
@@ -268,10 +315,12 @@ class FloppyCaptureWorker(CaptureWorker):
     track_read = pyqtSignal(object)  # TrackResult
 
     def __init__(self, request, parent=None, *, disk_format: str = "ibm.scan",
-                 device: str = "", capture_flux: bool = True, flux_revs: int = 0,
+                 format_fallbacks: str = "", device: str = "",
+                 capture_flux: bool = True, flux_revs: int = 0,
                  retries: int = 0, seek_retries: int = 0):
         super().__init__(request, parent)
         self.disk_format = disk_format
+        self.format_fallbacks = format_fallbacks
         self.device = device
         self.capture_flux = capture_flux
         self.flux_revs = flux_revs
@@ -393,24 +442,11 @@ class FloppyCaptureWorker(CaptureWorker):
 
         # Decode host-side. A flux stream that yields no image is still worth
         # archiving -- that is precisely the case the flux master exists for.
-        convert_format = self.disk_format
-        override = infer_uniform_format(read.track_results, self.disk_format)
-        if override:
-            self.log.emit(
-                f"{self.disk_format} reported inconsistent sectors/track across "
-                f"the disk; decoding with {override} instead for a "
-                f"geometry-consistent image (the flux master is unaffected -- "
-                f"this only changes how the .img gets assembled from it)."
-            )
-            convert_format = override
-        self.stage.emit("Decoding flux to sector image")
-        convert = self._run_gw(
-            build_gw_convert_cmd(flux, image, disk_format=convert_format),
-            logfh, watch_tracks=False,
-        )
+        convert = self._decode_flux(staging, flux, image, logfh, read.track_results)
         if not _nonempty(image):
             self.log.emit(
-                "Flux did not decode to a sector image; archiving the flux alone."
+                "Flux did not decode to a sector image under any tried format; "
+                "archiving the flux alone."
             )
             return CaptureArtifacts(
                 raw_image_path="", flux_path=flux, log_path=log_path,
@@ -422,6 +458,73 @@ class FloppyCaptureWorker(CaptureWorker):
         return self._detect_and_extract(
             staging, image, log_path, status, flux_path=flux
         )
+
+    def _decode_flux(
+        self, staging: StagingDir, flux: str, image: str, logfh,
+        read_track_results: dict[tuple[int, int], TrackResult],
+    ) -> _GwRun:
+        """Decode ``flux`` into ``image``, auto-trying non-IBM formats too.
+
+        Pure host-side work against the already-captured flux stream -- the
+        drive was released before this runs, so trying several format families
+        (IBM MFM, Amiga AmigaDOS, Atari ST, ...) costs only host CPU time, not
+        another pass over fragile media. Tries ``disk_format`` first; if that
+        decode doesn't come back fully clean (every track fully recovered),
+        also tries each of ``format_fallbacks`` and keeps whichever candidate
+        scored best (see :func:`_decode_score`) -- including ``disk_format``'s
+        own attempt if nothing else beats it. Returns the winning candidate's
+        :class:`_GwRun`; ``image`` holds its output (removed/left empty if
+        nothing decoded under any candidate).
+        """
+        candidates = candidate_formats(self.disk_format, self.format_fallbacks)
+        best: tuple[tuple[int, int], str, str, _GwRun] | None = None
+        for i, fmt in enumerate(candidates):
+            decode_fmt = fmt
+            if i == 0:
+                override = infer_uniform_format(read_track_results, fmt)
+                if override:
+                    self.log.emit(
+                        f"{fmt} reported inconsistent sectors/track across "
+                        f"the disk; decoding with {override} instead for a "
+                        f"geometry-consistent image (the flux master is "
+                        f"unaffected -- this only changes how the .img gets "
+                        f"assembled from it)."
+                    )
+                    decode_fmt = override
+            self.stage.emit(
+                "Decoding flux to sector image" if len(candidates) == 1
+                else f"Decoding flux ({decode_fmt}, format {i + 1}/{len(candidates)})"
+            )
+            out_path = image if len(candidates) == 1 else staging.child(f"_decode_{i}.img")
+            convert = self._run_gw(
+                build_gw_convert_cmd(flux, out_path, disk_format=decode_fmt),
+                logfh, watch_tracks=False,
+            )
+            score = _decode_score(convert)
+            if best is None or score > best[0]:
+                if best is not None and best[2] != out_path:
+                    _remove_quiet(best[2])
+                best = (score, decode_fmt, out_path, convert)
+            elif out_path != image:
+                _remove_quiet(out_path)
+            # A fully clean decode (every track, all sectors) can't be beaten by
+            # a different disk family's format -- stop spending host time on the
+            # remaining candidates.
+            if convert.track_results and convert.failed_tracks == 0:
+                break
+
+        score, chosen_fmt, chosen_path, convert = best
+        if chosen_path != image:
+            if _nonempty(chosen_path):
+                os.replace(chosen_path, image)
+            else:
+                _remove_quiet(chosen_path)
+        if len(candidates) > 1:
+            self.log.emit(
+                f"Using {chosen_fmt} decode ({score[0]} sectors recovered "
+                f"across {score[1]} fully clean tracks)."
+            )
+        return convert
 
     def _capture_direct(
         self, staging: StagingDir, log_path: str, logfh

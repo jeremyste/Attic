@@ -14,7 +14,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, fields
 
-from .config import ZSTD_LEVEL, ZSTD_LONG
+from .config import DEFAULT_STAGING_DIRNAME, ZSTD_LEVEL, ZSTD_LONG
 
 SETTINGS_FILENAME = "attic_settings.json"
 
@@ -25,6 +25,21 @@ class AppSettings:
     zstd_level: int = ZSTD_LEVEL
     zstd_long: bool = ZSTD_LONG
     keep_raw_image: bool = False  # keep the uncompressed .img alongside the .zst
+
+    # Don't archive any image at all (raw or compressed) when the read was
+    # fully clean AND extraction fully succeeded -- Extracted Files/ is kept
+    # either way, only the image itself is skipped. Checked and, when it
+    # applies, acted on *before* compression even runs (not a delete-after),
+    # so a large clean HDD image never pays the zstd-19 cost just to be
+    # discarded. Overrides keep_raw_image when both are on for a given job,
+    # since the point is to keep no image at all in that case. Off by default:
+    # this only matters once you've decided the extracted files alone are
+    # enough and the image would just be redundant with them.
+    hdd_auto_skip_image_when_clean: bool = False
+    # Same idea for optical: an optical capture's own status only reaches "ok"
+    # when ddrescue read the whole disc clean AND extraction (and DVD-Video
+    # conversion, if applicable) fully succeeded -- see OpticalCaptureWorker.
+    optical_auto_skip_image_when_clean: bool = False
 
     # Devices
     optical_device: str = "/dev/sr0"
@@ -53,6 +68,17 @@ class AppSettings:
     # (160K/360K/720K/1.2M/1.44M) without knowing the disk up front. Override for
     # non-IBM media (e.g. "amiga.amigados", "atarist.720").
     floppy_format: str = "ibm.scan"
+    # Comma-separated extra gw --format profiles to also try decoding when
+    # floppy_capture_flux is on and floppy_format's own decode doesn't come out
+    # fully clean. This only re-decodes the already-captured flux host-side
+    # (see FloppyCaptureWorker._decode_flux) -- no extra pass over the drive,
+    # so it's cheap to try several. Whichever candidate recovers the most
+    # sectors/clean tracks wins. Run `gw formats` to see every profile your gw
+    # version knows about (there are families for Apple II, classic Mac, and
+    # more beyond the two included here) and add whichever ones you expect to
+    # meet. Ignored entirely when floppy_capture_flux is off, since direct-read
+    # mode bakes the format into the single hardware pass.
+    floppy_format_fallbacks: str = "amiga.amigados,atarist.720"
     # Serial port of the Greaseweazle; blank lets gw auto-detect (the usual case,
     # and the only sane default when the port number moves between plug-ins).
     floppy_device: str = ""
@@ -89,6 +115,24 @@ class AppSettings:
 
     # HDD workflow: photograph + label before selecting/docking the drive.
     hdd_photo_before_dock: bool = True
+
+    # Staging: where per-job scratch work (ddrescue's raw image, extraction
+    # scratch, zstd's working files) is written while a job is in flight, before
+    # being atomically promoted into the working folder's Floppy/HDD/CD archive
+    # tree. Kept independent of the working folder so a fast local disk can be
+    # used for scratch work even when the working folder itself is a slower or
+    # removable archive drive. Blank defaults to a dedicated folder under the
+    # home directory (not the home directory itself). Point this at the working
+    # folder itself (or leave the working folder on local disk) to restore the
+    # old single-location behavior. This is a machine-local path, so it may
+    # need re-pointing after moving the working folder to a different computer.
+    staging_root: str = ""
+
+    def resolved_staging_root(self) -> str:
+        """``staging_root``, or ``~/Attic Staging`` when left blank."""
+        return self.staging_root.strip() or os.path.join(
+            os.path.expanduser("~"), DEFAULT_STAGING_DIRNAME
+        )
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)

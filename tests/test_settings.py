@@ -1,5 +1,7 @@
 import json
+import os
 
+from attic.core.config import DEFAULT_STAGING_DIRNAME
 from attic.core.settings import (
     AppSettings,
     load_settings,
@@ -44,3 +46,21 @@ def test_malformed_json_yields_defaults(tmp_path):
 def test_non_object_json_yields_defaults(tmp_path):
     (tmp_path / "attic_settings.json").write_text("[1, 2, 3]")
     assert load_settings(str(tmp_path)) == AppSettings()
+
+
+def test_resolved_staging_root_defaults_to_home_subfolder(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/fakeuser")
+    assert (
+        AppSettings().resolved_staging_root()
+        == f"/home/fakeuser/{DEFAULT_STAGING_DIRNAME}"
+    )
+
+
+def test_resolved_staging_root_honors_explicit_value():
+    s = AppSettings(staging_root="/mnt/fast-scratch")
+    assert s.resolved_staging_root() == "/mnt/fast-scratch"
+
+
+def test_resolved_staging_root_strips_and_treats_blank_as_unset():
+    expected = os.path.join(os.path.expanduser("~"), DEFAULT_STAGING_DIRNAME)
+    assert AppSettings(staging_root="   ").resolved_staging_root() == expected

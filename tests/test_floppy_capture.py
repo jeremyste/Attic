@@ -15,7 +15,16 @@ import subprocess
 import pytest
 
 from attic.controllers.base import JobRequest
-from attic.controllers.floppy import FloppyCaptureWorker
+from attic.controllers.floppy import (
+    TRACK_CLEAN,
+    TRACK_FAILED,
+    TRACK_RETRIED,
+    FloppyCaptureWorker,
+    TrackResult,
+    _decode_score,
+    _GwRun,
+    candidate_formats,
+)
 from attic.core.config import MediaType, Status
 from attic.core.staging import StagingDir
 
@@ -53,7 +62,7 @@ def _worker(monkeypatch, lines, returncode=0, **kw):
         return _FakeProc(lines, returncode)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    request = JobRequest(working_folder="/unused", media_type=MediaType.FLOPPY)
+    request = JobRequest(staging_root="/unused", media_type=MediaType.FLOPPY)
     return FloppyCaptureWorker(request, **kw), seen
 
 
@@ -179,7 +188,7 @@ def _flux_worker(monkeypatch, staging, scripts):
         return _FakeProc(lines)
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    request = JobRequest(working_folder="/unused", media_type=MediaType.FLOPPY)
+    request = JobRequest(staging_root="/unused", media_type=MediaType.FLOPPY)
     worker = FloppyCaptureWorker(request, capture_flux=True, disk_format="ibm.scan")
     return worker, seen
 
@@ -261,7 +270,7 @@ def test_flux_revs_override_is_passed_through(monkeypatch, staging):
         return _FakeProc(["Command Failed: stop here"])
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    request = JobRequest(working_folder="/unused", media_type=MediaType.FLOPPY)
+    request = JobRequest(staging_root="/unused", media_type=MediaType.FLOPPY)
     FloppyCaptureWorker(request, capture_flux=True, flux_revs=3).capture(staging)
 
     assert seen[0][seen[0].index("--revs") + 1] == "3"
@@ -337,3 +346,157 @@ def test_convert_keeps_scan_when_track_counts_are_already_uniform(
 
     _read_cmd, convert_cmd = seen
     assert convert_cmd[convert_cmd.index("--format") + 1] == "ibm.scan"
+
+
+# --- multi-format fallback (floppy_format_fallbacks) -------------------------
+
+
+def test_candidate_formats_orders_primary_first_and_dedupes():
+    assert candidate_formats("ibm.scan", "amiga.amigados,atarist.720") == [
+        "ibm.scan", "amiga.amigados", "atarist.720",
+    ]
+    # Case-insensitive de-dup: a fallback that just repeats the primary (in any
+    # case) contributes nothing extra.
+    assert candidate_formats("IBM.SCAN", "ibm.scan, amiga.amigados") == [
+        "IBM.SCAN", "amiga.amigados",
+    ]
+
+
+def test_candidate_formats_blank_primary_falls_back_to_ibm_scan():
+    assert candidate_formats("  ", "") == ["ibm.scan"]
+
+
+def test_candidate_formats_ignores_blank_fallback_entries():
+    assert candidate_formats("ibm.scan", " , amiga.amigados ,, ") == [
+        "ibm.scan", "amiga.amigados",
+    ]
+
+
+def test_decode_score_counts_sectors_and_clean_tracks():
+    run = _GwRun(track_results={
+        (0, 0): TrackResult(cyl=0, head=0, status=TRACK_CLEAN, sectors_got=18, sectors_total=18),
+        (0, 1): TrackResult(cyl=0, head=1, status=TRACK_FAILED, sectors_got=0, sectors_total=18),
+        (1, 0): TrackResult(cyl=1, head=0, status=TRACK_RETRIED, sectors_got=17, sectors_total=18),
+    })
+    assert _decode_score(run) == (35, 1)  # 18+0+17 sectors, 1 fully-clean track
+
+
+def _flux_worker_with_fallbacks(monkeypatch, scripts, *, format_fallbacks):
+    seen: list[list[str]] = []
+    calls = iter(scripts)
+
+    def fake_popen(cmd, **_kwargs):
+        seen.append(cmd)
+        lines, effect = next(calls)
+        if effect:
+            effect()
+        return _FakeProc(lines)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    request = JobRequest(staging_root="/unused", media_type=MediaType.FLOPPY)
+    worker = FloppyCaptureWorker(
+        request, capture_flux=True, disk_format="ibm.scan",
+        format_fallbacks=format_fallbacks,
+    )
+    return worker, seen
+
+
+def test_fallback_format_used_when_primary_decode_fails(monkeypatch, staging):
+    flux, image = staging.child("floppy.scp"), staging.child("floppy.img")
+    cand0 = staging.child("_decode_0.img")
+    cand1 = staging.child("_decode_1.img")
+    worker, seen = _flux_worker_with_fallbacks(
+        monkeypatch,
+        [
+            (["T0.0: IBM MFM (18/18 sectors) from 250kbps"], _write(flux, 4096)),
+            (["** FATAL ERROR:", "No tracks found"], None),  # ibm.scan: nothing
+            (["T0.0: Amiga DOS (11/11 sectors)"], _write(cand1, 512)),  # amiga: works
+        ],
+        format_fallbacks="amiga.amigados",
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.fsdetect.detect_filesystem",
+        lambda *a, **k: _Det(fstype="affs", recognized=True),
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.extract_mod.extract", lambda *a, **k: _ExtractOk()
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.scan_tree_date", lambda *a, **k: _Scan()
+    )
+
+    art = worker.capture(staging)
+
+    read_cmd, convert0, convert1 = seen
+    assert read_cmd[:2] == ["gw", "read"]
+    assert convert0[convert0.index("--format") + 1] == "ibm.scan"
+    assert convert1[convert1.index("--format") + 1] == "amiga.amigados"
+    # The winning (amiga) candidate's temp file was promoted to the real name,
+    # and no per-candidate temp files were left behind.
+    assert art.raw_image_path == image
+    assert os.path.exists(image)
+    assert not os.path.exists(cand0)
+    assert not os.path.exists(cand1)
+    assert art.status == Status.OK
+    assert art.filesystem_detected == "affs"
+
+
+def test_clean_primary_decode_skips_fallback_candidates(monkeypatch, staging):
+    flux, image = staging.child("floppy.scp"), staging.child("floppy.img")
+    cand0 = staging.child("_decode_0.img")
+    worker, seen = _flux_worker_with_fallbacks(
+        monkeypatch,
+        [
+            (["T0.0: IBM MFM (18/18 sectors) from 250kbps"], _write(flux, 4096)),
+            (["T0.0: IBM MFM (18/18 sectors) from 250kbps"], _write(cand0)),
+        ],
+        format_fallbacks="amiga.amigados,atarist.720",
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.fsdetect.detect_filesystem",
+        lambda *a, **k: _Det(fstype="vfat", recognized=True),
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.extract_mod.extract", lambda *a, **k: _ExtractOk()
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.scan_tree_date", lambda *a, **k: _Scan()
+    )
+
+    worker.capture(staging)
+
+    # Only the read + the primary format's convert ran -- a fully clean decode
+    # short-circuits the (otherwise wasted) fallback attempts.
+    assert len(seen) == 2
+    assert os.path.exists(image)
+    assert not os.path.exists(cand0)
+
+
+def test_no_fallbacks_configured_decodes_straight_to_final_name(monkeypatch, staging):
+    """format_fallbacks="" (the pre-feature behavior) writes directly to
+    floppy.img, same as before this feature existed -- no rename/temp file."""
+    flux, image = staging.child("floppy.scp"), staging.child("floppy.img")
+    worker, seen = _flux_worker_with_fallbacks(
+        monkeypatch,
+        [
+            (["T0.0: IBM MFM (18/18 sectors) from 250kbps"], _write(flux, 4096)),
+            (["Found 2880 sectors of 2880 (100%)"], _write(image)),
+        ],
+        format_fallbacks="",
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.fsdetect.detect_filesystem",
+        lambda *a, **k: _Det(fstype="vfat", recognized=True),
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.extract_mod.extract", lambda *a, **k: _ExtractOk()
+    )
+    monkeypatch.setattr(
+        "attic.controllers.floppy.scan_tree_date", lambda *a, **k: _Scan()
+    )
+
+    worker.capture(staging)
+
+    assert len(seen) == 2
+    convert_cmd = seen[1]
+    assert convert_cmd[-2:] == [flux, image]

@@ -58,6 +58,26 @@ def test_candidate_mount_when_signature_inconclusive(fake_run):
     assert probed == ["vfat", "msdos", "ntfs", "ext2"]
 
 
+def test_candidate_mounts_reach_amiga_and_mac_fstypes(fake_run):
+    # A correctly gw-decoded Amiga/Mac sector image still needs its own kernel
+    # filesystem driver to mount; affs/hfs must be reachable via the same
+    # candidate-mount fallback used for everything else here.
+    fake_run.when("blkid", returncode=2)
+    fake_run.when("mlabel", returncode=1)
+    fake_run.when("file", stdout="data\n")
+
+    probed = []
+
+    def probe(image, fstype):
+        probed.append(fstype)
+        return fstype == "hfs"
+
+    d = detect_filesystem("/img", mount_probe=probe)
+    assert d.recognized
+    assert d.fstype == "hfs"
+    assert "affs" in probed
+
+
 def test_unrecognized_when_all_fail(fake_run):
     fake_run.when("blkid", returncode=2)
     fake_run.when("mlabel", returncode=1)

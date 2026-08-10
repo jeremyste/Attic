@@ -75,6 +75,12 @@ class FinalizeRequest:
     keep_raw: bool = False  # normally False — only the compressed image is kept
     zstd_level: int = 19
     zstd_long: bool = True
+    # When True (AppSettings.hdd_auto_skip_image_when_clean /
+    # optical_auto_skip_image_when_clean), a fully clean + fully extracted job
+    # never gets an image archived at all -- see _read_and_extraction_are_clean.
+    # Checked before compression runs, so it also skips the compression work
+    # itself, not just the kept file. Overrides keep_raw when both apply.
+    skip_image_when_clean: bool = False
 
 
 class _Signals(QObject):
@@ -117,19 +123,31 @@ class _FinalizeTask(QRunnable):
             result = None
             raw_path = ""
             skipped_compression = False
+            image_skipped_clean = False
+            discarded_raw_size = 0
             if req.raw_image_path and os.path.exists(req.raw_image_path):
                 raw_path = _rename_to(
                     req.raw_image_path, req.staging.child(f"{req.chosen_name}.img")
                 )
-                result, skipped_compression = self._compress_or_skip(
-                    raw_path, req.staging.child(f"{req.chosen_name}.img.zst"),
-                    stage_label="image",
-                )
-                if result is None:  # cancelled mid-compression
-                    self._cleanup_cancelled()
-                    return
-                if not req.keep_raw and not skipped_compression:
+                if req.skip_image_when_clean and _read_and_extraction_are_clean(req):
+                    image_skipped_clean = True
+                    discarded_raw_size = os.path.getsize(raw_path)
                     _remove_quiet(raw_path)
+                    raw_path = ""
+                    self.signals.progress.emit(
+                        req.chosen_name,
+                        "Read clean, extraction ok -- discarding image",
+                    )
+                else:
+                    result, skipped_compression = self._compress_or_skip(
+                        raw_path, req.staging.child(f"{req.chosen_name}.img.zst"),
+                        stage_label="image",
+                    )
+                    if result is None:  # cancelled mid-compression
+                        self._cleanup_cancelled()
+                        return
+                    if not req.keep_raw and not skipped_compression:
+                        _remove_quiet(raw_path)
 
             flux_result = None
             flux_skipped = False
@@ -147,7 +165,7 @@ class _FinalizeTask(QRunnable):
                 if not flux_skipped:
                     _remove_quiet(flux_raw)
 
-            if result is None and flux_result is None:
+            if result is None and flux_result is None and not image_skipped_clean:
                 raise RuntimeError("nothing to archive: no image and no flux")
 
             for suffix, src in req.photos.items():
@@ -162,6 +180,20 @@ class _FinalizeTask(QRunnable):
             skip_note = ""
             for row in req.rows:
                 row.folder_path = rel_folder
+                if image_skipped_clean:
+                    # raw_image_filename/compressed_image_filename stay blank
+                    # -- that's how a future reader (and hdd_archive.py's
+                    # "deletable" check) tells "no image was ever kept" apart
+                    # from "the image was archived and later deleted". The
+                    # size is still worth recording even though nothing of
+                    # that size survives on disk.
+                    row.raw_size_bytes = str(discarded_raw_size)
+                    row.notes = (
+                        row.notes + " | "
+                        "Image not archived: read was fully clean and "
+                        "extraction succeeded, so only Extracted Files/ was "
+                        "kept (auto-skip enabled)."
+                    ).strip(" |")
                 if result is not None:
                     row.raw_image_filename = (
                         os.path.basename(raw_path)
@@ -263,7 +295,10 @@ class _FinalizeTask(QRunnable):
     def _record_failure(self, summary: str, tb: str) -> None:
         """Append a failed catalog row pointing at the surviving staging dir."""
         req = self.req
-        note = f"Temp dir left for inspection: {req.staging.rel_path()}"
+        # Absolute, not staging.rel_path(): staging now lives under its own
+        # staging_root, which may not be anywhere near the working folder this
+        # note gets written into.
+        note = f"Temp dir left for inspection: {req.staging.path}"
         try:
             for row in req.rows:
                 row.status = Status.FAILED.value
@@ -364,6 +399,35 @@ class FinalizePool:
     def _forget_by_rows(self, rows) -> None:
         if rows:
             self._forget(rows[0].chosen_name)
+
+
+def _read_and_extraction_are_clean(req: FinalizeRequest) -> bool:
+    """True when ``req`` is a fully clean, fully extracted result.
+
+    Mirrors ``hdd_archive.py``'s "deletable" criteria (kept in sync
+    deliberately -- both answer "is this image genuinely redundant with its
+    extraction"), just evaluated pre-write on live ``CatalogRow`` objects
+    instead of post-write catalog dict rows:
+
+    * Every row's own extraction ``status`` must be "ok".
+    * HDD only: its rows share one drive-level read, recorded once per row as
+      ``read_bad_bytes`` (set in AppContext.route_hdd before this request is
+      built) -- every row must show a genuinely known-zero count, not blank
+      (blank means unrecorded, which is not the same as known-clean).
+    * Everything else that could reach here (currently just optical, since
+      floppy never sets skip_image_when_clean): a single row whose own status
+      already reached "ok" only when ddrescue's read was fully clean AND
+      extraction (and DVD-Video conversion, if applicable) fully succeeded --
+      see OpticalCaptureWorker.capture -- so status alone is sufficient.
+    """
+    if not req.rows:
+        return False
+    if not all(row.status == Status.OK.value for row in req.rows):
+        return False
+    if req.media_type != MediaType.HDD:
+        return True
+    bad_values = [row.read_bad_bytes for row in req.rows]
+    return bool(bad_values) and all(v.isdigit() and int(v) == 0 for v in bad_values)
 
 
 def _remove_quiet(path: str) -> None:

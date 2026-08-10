@@ -47,7 +47,7 @@ class OpticalTab(PipelineTab):
         self.set_stage("Starting…")
 
         request = JobRequest(
-            working_folder=self.context.session.working_folder,
+            staging_root=self.context.staging_root,
             media_type=MediaType.OPTICAL,
             physical_label=outcome.physical_label,
             source_id=self.device_edit.text().strip() or "/dev/sr0",

@@ -74,7 +74,10 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage(f"Working folder: {session.working_folder}")
+        self.statusBar().showMessage(
+            f"Working folder: {session.working_folder}  |  "
+            f"Staging: {self.context.staging_root}"
+        )
 
         # Finalize-pool signals are cross-thread; Qt queues them to the GUI thread.
         # The pool reports under the resolved name, which the panel knows as an
@@ -107,7 +110,9 @@ class MainWindow(QMainWindow):
             tab = self.tabs.widget(i)
             if hasattr(tab, "apply_settings"):
                 tab.apply_settings()
-        self.statusBar().showMessage("Settings saved to working folder.")
+        self.statusBar().showMessage(
+            f"Settings saved to working folder. Staging: {self.context.staging_root}"
+        )
 
     def _on_finalize_progress(self, name: str, stage: str) -> None:
         self.processing_panel.set_stage_by_name(name, stage)

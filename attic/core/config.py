@@ -54,6 +54,12 @@ CATALOG_FILENAME = "catalog.csv"
 TMP_DIRNAME = ".tmp"
 EXTRACTED_DIRNAME = "Extracted Files"
 
+# Default subfolder of the home directory used for capture staging when
+# AppSettings.staging_root is left blank -- a dedicated folder, not the home
+# directory itself (which would otherwise become the literal parent of
+# ``.tmp/``).
+DEFAULT_STAGING_DIRNAME = "Attic Staging"
+
 # Per-item artifact filename patterns (``{name}`` = resolved chosen_name).
 RAW_IMAGE_SUFFIX = ".img"
 COMPRESSED_IMAGE_SUFFIX = ".img.zst"
@@ -82,7 +88,13 @@ MIN_VALID_YEAR = 1980
 
 # Candidate filesystem types tried, in order, for a loopback mount when blkid /
 # signature detection is inconclusive. Ordered most-likely-first for old media.
-CANDIDATE_MOUNT_FSTYPES = ("vfat", "msdos", "ntfs", "ext2")
+# "affs" (Amiga AmigaDOS OFS/FFS) and "hfs" (classic Mac OS Standard/HFS, pre-
+# HFS+) only matter once the flux was actually decoded with the matching
+# non-IBM gw format (see floppy_format_fallbacks in AppSettings) -- a correctly
+# decoded Amiga/Mac sector image still needs its own kernel filesystem driver
+# to mount, same as any other fstype here. Harmless if that kernel module
+# isn't present: the mount attempt just fails and detection moves on.
+CANDIDATE_MOUNT_FSTYPES = ("vfat", "msdos", "ntfs", "ext2", "affs", "hfs")
 
 # FAT-family filesystem identifiers that should be extracted with mtools rather
 # than a kernel mount.

@@ -5,7 +5,7 @@ and label the drive first, then dock it, refresh, and select it here.
 
 Carries the same safety model as the inline dropdown: only removable/USB disks by
 default, with an explicit override (⚠-flagged) for drives that mis-report as
-internal.
+internal -- or that turn out to be the drive hosting the archive itself.
 """
 
 from __future__ import annotations
@@ -28,10 +28,11 @@ from ..core import devices
 class DeviceSelectionDialog(QDialog):
     """Pick a target drive; returns it via :meth:`selected_device`."""
 
-    def __init__(self, parent=None, *, show_all: bool = False):
+    def __init__(self, parent=None, *, show_all: bool = False, working_folder: str = ""):
         super().__init__(parent)
         self.setWindowTitle("Select drive")
         self._devices: list[devices.BlockDevice] = []
+        self._working_folder = working_folder
 
         prompt = QLabel("Dock/insert the drive now, then select it below.")
         prompt.setWordWrap(True)
@@ -68,15 +69,20 @@ class DeviceSelectionDialog(QDialog):
             QMessageBox.warning(
                 self, "Show all drives",
                 "Enabling ALL drives includes this computer's own internal and "
-                "system disks. Non-removable drives are marked ⚠ and require an "
+                "system disks, as well as the drive currently hosting the "
+                "archive itself. Flagged drives are marked ⚠ and require an "
                 "extra confirmation before any read.",
             )
         self.refresh()
 
     def refresh(self) -> None:
+        archive_disk = (
+            devices.host_disk_path(self._working_folder) if self._working_folder else ""
+        )
         self._devices = (
-            devices.list_all_devices() if self.show_all_check.isChecked()
-            else devices.list_removable_devices()
+            devices.list_all_devices(archive_disk_path=archive_disk)
+            if self.show_all_check.isChecked()
+            else devices.list_removable_devices(archive_disk_path=archive_disk)
         )
         self.combo.clear()
         for d in self._devices:
