@@ -22,6 +22,73 @@ def test_build_argv_optical_block_size():
     assert "-d" in argv
 
 
+def test_build_argv_no_timeout_by_default():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map")
+    assert "-T" not in argv
+
+
+def test_build_argv_timeout_minutes():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map", timeout_minutes=15)
+    assert "-T" in argv
+    assert argv[argv.index("-T") + 1] == "15m"
+
+
+def test_build_argv_timeout_applies_on_first_pass_too():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map", first_pass_only=True, timeout_minutes=5)
+    assert "-n" in argv
+    assert "-T" in argv
+    assert argv[argv.index("-T") + 1] == "5m"
+
+
+# --- stop_after: how many of ddrescue's four phases to run ------------------
+
+
+def test_stop_after_full_matches_default_behavior():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map", stop_after="full")
+    assert "-r3" in argv
+    assert "-n" not in argv
+    assert "-N" not in argv
+
+
+def test_stop_after_scraping_skips_retry_only():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map", stop_after="scraping")
+    assert not any(a.startswith("-r") for a in argv)
+    assert "-n" not in argv  # scraping itself still runs
+    assert "-N" not in argv  # trimming still runs
+
+
+def test_stop_after_trimming_skips_scrape_and_retry():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map", stop_after="trimming")
+    assert "-n" in argv  # no-scrape
+    assert "-N" not in argv  # trimming itself still runs
+    assert not any(a.startswith("-r") for a in argv)
+
+
+def test_stop_after_copying_skips_trim_scrape_and_retry():
+    argv = build_ddrescue_argv("/dev/sdb", "img", "map", stop_after="copying")
+    assert "-N" in argv
+    assert "-n" in argv
+    assert not any(a.startswith("-r") for a in argv)
+
+
+def test_stop_after_trimming_matches_first_pass_only_flags():
+    """first_pass_only is the HDD "preview pass" workflow's name for exactly
+    the same ddrescue invocation as stop_after="trimming"."""
+    a = build_ddrescue_argv("/dev/sdb", "img", "map", first_pass_only=True)
+    b = build_ddrescue_argv("/dev/sdb", "img", "map", stop_after="trimming")
+    assert a == b
+
+
+def test_first_pass_only_overrides_a_more_thorough_stop_after():
+    # The interactive "first pass" workflow always wants copying+trimming
+    # only, regardless of what the general stop_after setting says.
+    argv = build_ddrescue_argv(
+        "/dev/sdb", "img", "map", first_pass_only=True, stop_after="full",
+    )
+    assert "-n" in argv
+    assert not any(a.startswith("-r") for a in argv)
+
+
 def test_parse_mapfile_counts_by_status():
     text = "\n".join([
         "# Mapfile created by GNU ddrescue",

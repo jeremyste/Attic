@@ -77,6 +77,62 @@ def test_eject_failure_is_logged_not_fatal(monkeypatch, fake_run, staging):
     assert artifacts is not None
 
 
+def test_abort_short_circuits_before_detection_and_extraction(monkeypatch, fake_run, staging):
+    """A full cancel (request_abort) must skip detection/extraction entirely --
+    that work is wasted on a result run() is about to discard."""
+    fake_run.when("eject", returncode=0)
+    monkeypatch.setattr(
+        optical_mod, "run_ddrescue",
+        lambda *a, **k: DdrescueOutcome(
+            returncode=0, stderr_tail="",
+            last_summary=type("S", (), {"bad_bytes": 5, "rescued_bytes": 100})(),
+        ),
+    )
+    detect_calls = []
+    monkeypatch.setattr(
+        optical_mod.fsdetect, "detect_filesystem",
+        lambda *a, **k: detect_calls.append(1) or FsDetection(
+            fstype="", label="", recognized=False, method="test"
+        ),
+    )
+    request = JobRequest(staging_root="/unused", media_type=MediaType.OPTICAL)
+    worker = OpticalCaptureWorker(request, eject_on_complete=True)
+    worker.request_abort()
+
+    artifacts = worker.capture(staging)
+
+    assert detect_calls == []
+    assert artifacts.status.value == "cancelled"
+    # The drive is still released/ejected even on an aborted job.
+    assert fake_run.find("eject") is not None
+
+
+def test_stop_after_setting_reaches_the_ddrescue_argv(monkeypatch, fake_run, staging):
+    fake_run.when("eject", returncode=0)
+    seen_argv = {}
+
+    def _fake_run_ddrescue(argv, *a, **k):
+        seen_argv["argv"] = argv
+        return DdrescueOutcome(
+            returncode=0, stderr_tail="",
+            last_summary=type("S", (), {"bad_bytes": 0, "rescued_bytes": 1})(),
+        )
+
+    monkeypatch.setattr(optical_mod, "run_ddrescue", _fake_run_ddrescue)
+    monkeypatch.setattr(
+        optical_mod.fsdetect, "detect_filesystem",
+        lambda *a, **k: FsDetection(fstype="", label="", recognized=False, method="test"),
+    )
+    request = JobRequest(staging_root="/unused", media_type=MediaType.OPTICAL)
+    worker = OpticalCaptureWorker(request, stop_after="copying")
+
+    worker.capture(staging)
+
+    assert "-N" in seen_argv["argv"]
+    assert "-n" in seen_argv["argv"]
+    assert not any(a.startswith("-r") for a in seen_argv["argv"])
+
+
 def test_ejects_the_requested_device(monkeypatch, fake_run, staging):
     fake_run.when("eject", returncode=0)
     monkeypatch.setattr(

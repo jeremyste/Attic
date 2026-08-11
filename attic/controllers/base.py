@@ -97,18 +97,33 @@ class CaptureWorker(QThread):
     # re-enables Begin Capture on this, so the next disk can be loaded while the
     # current one is still being processed.
     drive_released = pyqtSignal()
+    # emitted instead of `captured` when request_abort() won the race: nothing
+    # was kept, payload is (JobRequest, StagingDir) so the caller can record a
+    # cancelled catalog row and discard the staging dir.
+    aborted = pyqtSignal(object, object)
 
     def __init__(self, request: JobRequest, parent=None):
         super().__init__(parent)
         self.request = request
         self.staging: StagingDir | None = None
         self._released = False
+        self._abort_requested = False
 
     def release_drive(self) -> None:
         """Signal that the drive is free. Idempotent; safe to call repeatedly."""
         if not self._released:
             self._released = True
             self.drive_released.emit()
+
+    def request_skip(self) -> None:
+        """Stop the current step (e.g. a slow ddrescue read) right away and
+        continue the pipeline with whatever was recovered so far."""
+        self.requestInterruption()
+
+    def request_abort(self) -> None:
+        """Stop the whole job and discard everything captured so far."""
+        self._abort_requested = True
+        self.requestInterruption()
 
     # --- subclass hook ------------------------------------------------------
 
@@ -130,6 +145,10 @@ class CaptureWorker(QThread):
             )
             self.log.emit(f"Staging: {self.staging.path}")
             artifacts = self.capture(self.staging)
+            if self._abort_requested:
+                self.log.emit("Cancelled by user -- discarding staged data.")
+                self.aborted.emit(self.request, self.staging)
+                return
             self.captured.emit(self.request, self.staging, artifacts)
         except Exception as exc:  # noqa: BLE001 - surface everything, never crash GUI
             summary = f"{type(exc).__name__}: {exc}"

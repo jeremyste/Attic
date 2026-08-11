@@ -53,6 +53,7 @@ class _StubWorker:
         for name in (
             "stage", "log", "track_read", "captured", "failed", "finished",
             "drive_released", "map_progress", "progress", "pass_done", "done",
+            "aborted",
         ):
             setattr(self, name, _Signal())
 

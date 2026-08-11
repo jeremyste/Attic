@@ -104,90 +104,91 @@ def test_unknown_job_ids_are_ignored(qapp):
     assert panel.rows() == []
 
 
-# --- Cancel / Skip actions ---------------------------------------------------
+# --- double-click job action popup -------------------------------------------
 
 
-def test_cancel_and_skip_buttons_hidden_until_finalizing(qapp):
-    # isHidden() (the widget's own explicit show/hide flag) rather than
-    # isVisible() (which also requires a shown top-level window, which these
-    # offscreen tests never create) is what actually reflects setVisible().
-    from attic.ui.processing_panel import ProcessingPanel
+def _stub_exec(action: str | None):
+    """Stand in for JobActionDialog.exec(): simulate one button click (or a
+    dismiss, for None) instead of blocking on a real modal event loop."""
+    def _exec(self):
+        if action == "skip":
+            self._choose_skip()
+        elif action == "cancel":
+            self._choose_cancel()
+        return 0
+    return _exec
+
+
+def test_double_click_during_capture_offers_skip_and_cancel_when_supported(qapp, monkeypatch):
+    from attic.ui.processing_panel import JobActionDialog, ProcessingPanel
 
     panel = ProcessingPanel()
-    panel.start_job("a", MediaType.FLOPPY, "Disk A")
-    row = panel._rows["a"]
-    assert row.cancel_btn.isHidden()
-    assert row.skip_btn.isHidden()
+    panel.start_job("a", MediaType.OPTICAL, "Mix CD", supports_capture_control=True)
 
-    panel.rename_job("a", "Disk A")
-    assert not row.cancel_btn.isHidden()
-    assert not row.skip_btn.isHidden()
+    emitted = []
+    panel.capture_skip_requested.connect(emitted.append)
+    panel.capture_cancel_requested.connect(emitted.append)
 
-    panel.finish_by_name("Disk A", "archived")
-    assert row.cancel_btn.isHidden()
-    assert row.skip_btn.isHidden()
+    monkeypatch.setattr(JobActionDialog, "exec", _stub_exec("skip"))
+    panel._open_job_dialog(panel._items["a"])
+
+    assert emitted == ["a"]
 
 
-def test_clicking_cancel_asks_then_emits_with_chosen_name(qapp, monkeypatch):
+def test_double_click_during_capture_has_no_actions_when_unsupported(qapp, monkeypatch):
     from PyQt6.QtWidgets import QMessageBox
 
     from attic.ui.processing_panel import ProcessingPanel
 
     panel = ProcessingPanel()
-    panel.start_job("a", MediaType.FLOPPY, "Disk A")
-    panel.rename_job("a", "Disk A")
+    panel.start_job("a", MediaType.FLOPPY, "Disk A")  # supports_capture_control=False
 
-    emitted = []
-    panel.cancel_requested.connect(emitted.append)
+    shown = []
     monkeypatch.setattr(
-        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+        QMessageBox, "information",
+        lambda *a, **k: shown.append(a) or QMessageBox.StandardButton.Ok,
     )
-
-    panel._rows["a"].cancel_btn.click()
-
-    assert emitted == ["Disk A"]
-
-
-def test_declining_the_confirmation_does_not_emit(qapp, monkeypatch):
-    from PyQt6.QtWidgets import QMessageBox
-
-    from attic.ui.processing_panel import ProcessingPanel
-
-    panel = ProcessingPanel()
-    panel.start_job("a", MediaType.FLOPPY, "Disk A")
-    panel.rename_job("a", "Disk A")
-
     emitted = []
-    panel.cancel_requested.connect(emitted.append)
-    panel.skip_requested.connect(emitted.append)
-    monkeypatch.setattr(
-        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No
-    )
+    panel.capture_skip_requested.connect(emitted.append)
+    panel.capture_cancel_requested.connect(emitted.append)
 
-    panel._rows["a"].cancel_btn.click()
-    panel._rows["a"].skip_btn.click()
+    panel._open_job_dialog(panel._items["a"])
 
     assert emitted == []
+    assert len(shown) == 1
 
 
-def test_clicking_skip_asks_then_emits_with_chosen_name(qapp, monkeypatch):
-    from PyQt6.QtWidgets import QMessageBox
-
-    from attic.ui.processing_panel import ProcessingPanel
+def test_double_click_while_finalizing_emits_compress_actions(qapp, monkeypatch):
+    from attic.ui.processing_panel import JobActionDialog, ProcessingPanel
 
     panel = ProcessingPanel()
     panel.start_job("a", MediaType.HDD, "/dev/sdb")
     panel.rename_job("a", "drive_004")
+    assert panel._rows["a"].stage_kind == "finalizing"
 
     emitted = []
-    panel.skip_requested.connect(emitted.append)
-    monkeypatch.setattr(
-        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
-    )
+    panel.compress_cancel_requested.connect(emitted.append)
 
-    panel._rows["a"].skip_btn.click()
+    monkeypatch.setattr(JobActionDialog, "exec", _stub_exec("cancel"))
+    panel._open_job_dialog(panel._items["a"])
 
     assert emitted == ["drive_004"]
+
+
+def test_dismissing_the_dialog_emits_nothing(qapp, monkeypatch):
+    from attic.ui.processing_panel import JobActionDialog, ProcessingPanel
+
+    panel = ProcessingPanel()
+    panel.start_job("a", MediaType.OPTICAL, "Mix CD", supports_capture_control=True)
+
+    emitted = []
+    panel.capture_skip_requested.connect(emitted.append)
+    panel.capture_cancel_requested.connect(emitted.append)
+
+    monkeypatch.setattr(JobActionDialog, "exec", _stub_exec(None))  # "Dismiss"
+    panel._open_job_dialog(panel._items["a"])
+
+    assert emitted == []
 
 
 # --- drive release ----------------------------------------------------------

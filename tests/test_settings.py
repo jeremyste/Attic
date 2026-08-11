@@ -21,11 +21,23 @@ def test_defaults_when_no_file(tmp_path):
 
 def test_roundtrip(tmp_path):
     s = AppSettings(zstd_level=12, keep_raw_image=True, optical_device="/dev/sr1",
-                    auto_accept_fallback_names=True, floppy_cylinders=40, floppy_heads=1)
+                    auto_accept_fallback_names=True, floppy_cylinders=40, floppy_heads=1,
+                    ddrescue_retries=1, ddrescue_timeout_minutes=15,
+                    ddrescue_stop_after="scraping")
     path = save_settings(str(tmp_path), s)
     assert path == settings_path(str(tmp_path))
     loaded = load_settings(str(tmp_path))
     assert loaded == s
+    assert loaded.ddrescue_timeout_minutes == 15
+    assert loaded.ddrescue_stop_after == "scraping"
+
+
+def test_ddrescue_timeout_defaults_to_unlimited():
+    assert AppSettings().ddrescue_timeout_minutes == 0
+
+
+def test_ddrescue_stop_after_defaults_to_full():
+    assert AppSettings().ddrescue_stop_after == "full"
 
 
 def test_unknown_keys_ignored(tmp_path):

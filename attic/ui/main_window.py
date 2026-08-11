@@ -86,10 +86,12 @@ class MainWindow(QMainWindow):
         self.finalize_pool.signals.done.connect(self._on_finalize_done)
         self.finalize_pool.signals.failed.connect(self._on_finalize_failed)
         self.finalize_pool.signals.cancelled.connect(self._on_finalize_cancelled)
-        # The panel's Cancel/Skip buttons only know a job's chosen name; the
-        # pool is what actually holds the cancellation handle for it.
-        self.processing_panel.cancel_requested.connect(self.finalize_pool.cancel)
-        self.processing_panel.skip_requested.connect(
+        # The panel's compression-stage actions only know a job's chosen name;
+        # the pool is what actually holds the cancellation handle for it.
+        # Capture-phase actions (still imaging/extracting) are connected by
+        # each tab instead, since only the tab knows which worker to signal.
+        self.processing_panel.compress_cancel_requested.connect(self.finalize_pool.cancel)
+        self.processing_panel.compress_skip_requested.connect(
             self.finalize_pool.skip_compression
         )
 

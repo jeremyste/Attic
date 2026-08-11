@@ -13,6 +13,7 @@ Kept separate from the main window so the routing logic stays cohesive.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 
 from PyQt6.QtWidgets import QWidget
@@ -211,6 +212,31 @@ class AppContext:
             item = self._pending_after.pop(row.chosen_name, None)
             if item is not None:
                 self.pending_panel.add_pending(item)
+
+    # --- capture-phase cancellation ------------------------------------------
+
+    def record_capture_cancelled(self, request: JobRequest, staging: StagingDir) -> None:
+        """A capture-phase "Cancel entirely" was chosen (before the job ever
+        reached the finalize pool): discard the staging dir and record a
+        cancelled catalog row, matching how the finalize pool's own cancel
+        handles a job that's already further along.
+        """
+        if self.processing_panel is not None:
+            self.processing_panel.finish_job(request.session_id, "Cancelled")
+        catalog.append_row(
+            self.session.working_folder,
+            CatalogRow(
+                media_type=request.media_type.value,
+                source_id=request.source_id,
+                physical_label_entered=request.physical_label,
+                status=Status.CANCELLED.value,
+                notes=(
+                    "Cancelled by user during capture -- raw image/flux "
+                    "discarded, not archived."
+                ),
+            ),
+        )
+        shutil.rmtree(staging.path, ignore_errors=True)
 
     # --- helpers ------------------------------------------------------------
 

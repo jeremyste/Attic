@@ -10,6 +10,7 @@ import os
 
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -92,9 +93,55 @@ class SettingsDialog(QDialog):
 
         # Devices
         self.optical = QLineEdit(settings.optical_device)
+        self.stop_after = QComboBox()
+        for value, label in (
+            ("copying", "Copying only (fastest -- skips trimming, scraping, retrying)"),
+            ("trimming", "+ Trimming (delimit bad areas, then stop)"),
+            ("scraping", "+ Scraping (also sweep bad areas once, then stop)"),
+            ("full", "Full: also retry bad sectors (default)"),
+        ):
+            self.stop_after.addItem(label, value)
+        idx = self.stop_after.findData(settings.ddrescue_stop_after)
+        self.stop_after.setCurrentIndex(idx if idx >= 0 else self.stop_after.count() - 1)
+        self.stop_after.setToolTip(
+            "How many of ddrescue's four phases (copying, trimming, "
+            "scraping, retrying -- each strictly more thorough and slower "
+            "than the last) to actually run, for both HDD and optical "
+            "reads. Stopping earlier gives up on more of a damaged disk but "
+            "can't get stuck the way retrying can. 'ddrescue retry passes' "
+            "below only matters when this is set to Full."
+        )
+        self.stop_after.currentIndexChanged.connect(self._on_stop_after_changed)
         self.retries = QSpinBox()
         self.retries.setRange(0, 20)
         self.retries.setValue(settings.ddrescue_retries)
+        self.retries.setToolTip(
+            "How many retry passes ddrescue makes over bad areas (its -r "
+            "flag) before giving up on them -- only used when 'ddrescue: "
+            "run through' above is set to Full. Lower it, and/or set a "
+            "give-up time below, for a faster 'best effort' pass rather "
+            "than trying to squeeze out every last byte."
+        )
+        self._on_stop_after_changed()
+        self.ddrescue_timeout = QSpinBox()
+        self.ddrescue_timeout.setRange(0, 1440)
+        self.ddrescue_timeout.setSpecialValueText("no limit (default)")
+        self.ddrescue_timeout.setValue(settings.ddrescue_timeout_minutes)
+        self.ddrescue_timeout.setSuffix(" min")
+        self.ddrescue_timeout.setToolTip(
+            "ddrescue's own -T/--timeout: give up once this many minutes "
+            "have passed since the last successful read -- NOT total run "
+            "time, so a mostly-good disk or drive is never affected; only a "
+            "stretch of stuck retries is. Use this together with 'ddrescue "
+            "retries' for media you don't need a perfect read from: e.g. "
+            "1-2 retries and a 10-20 minute timeout for a fast best-effort "
+            "pass, vs. the defaults (3 retries, no timeout) to try as long "
+            "as it takes. A read that's been cut short this way is still "
+            "kept and extracted -- it just moves on with whatever it got "
+            "instead of grinding on the same bad sectors indefinitely. You "
+            "can also give up on a running read at any time by double-"
+            "clicking its row in the Processing panel."
+        )
         dev = QFormLayout()
         self.eject_on_complete = QCheckBox("Eject the disc when imaging finishes")
         self.eject_on_complete.setChecked(settings.eject_on_complete)
@@ -103,7 +150,9 @@ class SettingsDialog(QDialog):
             "next one. Best-effort -- never fails the capture."
         )
         dev.addRow("Optical device:", self.optical)
-        dev.addRow("ddrescue retries:", self.retries)
+        dev.addRow("ddrescue: run through:", self.stop_after)
+        dev.addRow("ddrescue retry passes:", self.retries)
+        dev.addRow("ddrescue give-up time:", self.ddrescue_timeout)
         dev.addRow(self.eject_on_complete)
 
         self.convert_dvd_video = QCheckBox(
@@ -240,6 +289,12 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _on_stop_after_changed(self) -> None:
+        # Retry passes are meaningless once the depth stops before the
+        # retrying phase -- disable rather than hide, so it's clear the
+        # value is still saved, just not currently in effect.
+        self.retries.setEnabled(self.stop_after.currentData() == "full")
+
     def _browse_staging_root(self) -> None:
         start = self.staging_root.text().strip() or os.path.expanduser("~")
         path = QFileDialog.getExistingDirectory(self, "Choose staging location", start)
@@ -256,6 +311,8 @@ class SettingsDialog(QDialog):
             optical_auto_skip_image_when_clean=self.optical_skip_clean.isChecked(),
             optical_device=self.optical.text().strip() or "/dev/sr0",
             ddrescue_retries=self.retries.value(),
+            ddrescue_timeout_minutes=self.ddrescue_timeout.value(),
+            ddrescue_stop_after=self.stop_after.currentData(),
             eject_on_complete=self.eject_on_complete.isChecked(),
             convert_dvd_video=self.convert_dvd_video.isChecked(),
             dvd_video_crf=self.dvd_video_crf.value(),

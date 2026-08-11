@@ -33,12 +33,15 @@ class OpticalCaptureWorker(CaptureWorker):
 
     def __init__(
         self, request, retries: int = 3, *,
+        timeout_minutes: int = 0, stop_after: str = "full",
         convert_dvd_video: bool = True, dvd_video_crf: int = 18,
         eject_on_complete: bool = True,
         parent=None,
     ):
         super().__init__(request, parent)
         self.retries = retries
+        self.timeout_minutes = timeout_minutes
+        self.stop_after = stop_after
         self.convert_dvd_video = convert_dvd_video
         self.dvd_video_crf = dvd_video_crf
         self.eject_on_complete = eject_on_complete
@@ -52,7 +55,10 @@ class OpticalCaptureWorker(CaptureWorker):
         self.stage.emit("Imaging disc")
         self.log.emit(f"ddrescue {device} -> {raw}")
 
-        argv = build_ddrescue_argv(device, raw, mapfile, optical=True, retries=self.retries)
+        argv = build_ddrescue_argv(
+            device, raw, mapfile, optical=True, retries=self.retries,
+            timeout_minutes=self.timeout_minutes, stop_after=self.stop_after,
+        )
         outcome = run_ddrescue(
             argv,
             mapfile,
@@ -66,6 +72,12 @@ class OpticalCaptureWorker(CaptureWorker):
         self.release_drive()
         if self.eject_on_complete:
             self._eject(device)
+
+        if self._abort_requested:
+            # A full cancel was requested -- run() will discard this result
+            # without archiving anything, so skip the pointless detection/
+            # extraction/DVD-conversion work on data about to be thrown away.
+            return CaptureArtifacts(raw_image_path=raw, log_path=mapfile, status=Status.CANCELLED)
 
         if outcome.returncode != 0 and (outcome.last_summary is None
                                         or outcome.last_summary.rescued_bytes == 0):

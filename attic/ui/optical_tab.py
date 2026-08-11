@@ -18,6 +18,7 @@ class OpticalTab(PipelineTab):
         # Jobs overlap: the drive is released after imaging, so a new capture
         # can start while earlier ones are still extracting or compressing.
         self._workers: list[OpticalCaptureWorker] = []
+        self._workers_by_id: dict[str, OpticalCaptureWorker] = {}
 
         self.device_edit = QLineEdit(context.settings.optical_device)
         dev_row = QHBoxLayout()
@@ -29,6 +30,11 @@ class OpticalTab(PipelineTab):
         self._layout.addWidget(QLabel("Rescue progress:"))
         self._layout.addWidget(self.bar)
         self._install_common()
+
+        panel = self.context.processing_panel
+        if panel is not None:
+            panel.capture_skip_requested.connect(self._on_capture_skip)
+            panel.capture_cancel_requested.connect(self._on_capture_cancel)
 
         self.begin_btn.clicked.connect(self._begin)
 
@@ -58,11 +64,14 @@ class OpticalTab(PipelineTab):
             panel.start_job(
                 request.session_id, MediaType.OPTICAL,
                 outcome.physical_label or "Disc (unlabeled)",
+                supports_capture_control=True,
             )
 
         s = self.context.settings
         worker = OpticalCaptureWorker(
             request, retries=s.ddrescue_retries,
+            timeout_minutes=s.ddrescue_timeout_minutes,
+            stop_after=s.ddrescue_stop_after,
             convert_dvd_video=s.convert_dvd_video, dvd_video_crf=s.dvd_video_crf,
             eject_on_complete=s.eject_on_complete,
         )
@@ -71,6 +80,7 @@ class OpticalTab(PipelineTab):
         worker.map_progress.connect(self.bar.set_summary)
         worker.captured.connect(self._on_captured)
         worker.failed.connect(self._on_failed)
+        worker.aborted.connect(self._on_aborted)
         if panel is not None:
             jid = request.session_id
             worker.stage.connect(lambda t: panel.set_stage(jid, t))
@@ -79,15 +89,33 @@ class OpticalTab(PipelineTab):
         worker.drive_released.connect(lambda: self.set_busy(False))
         worker.finished.connect(lambda w=worker: self._forget(w))
         self._workers.append(worker)
+        self._workers_by_id[request.session_id] = worker
         worker.start()
 
     def _forget(self, worker: OpticalCaptureWorker) -> None:
         if worker in self._workers:
             self._workers.remove(worker)
+        self._workers_by_id = {
+            jid: w for jid, w in self._workers_by_id.items() if w is not worker
+        }
+
+    def _on_capture_skip(self, job_id: str) -> None:
+        worker = self._workers_by_id.get(job_id)
+        if worker is not None:
+            worker.request_skip()
+
+    def _on_capture_cancel(self, job_id: str) -> None:
+        worker = self._workers_by_id.get(job_id)
+        if worker is not None:
+            worker.request_abort()
 
     def _on_captured(self, request, staging, artifacts) -> None:
         self.context.route_single(request, staging, artifacts)
         self._settle_stage("Idle - ready for next disc")
+
+    def _on_aborted(self, request, staging) -> None:
+        self.context.record_capture_cancelled(request, staging)
+        self._settle_stage("Cancelled - ready for next disc")
 
     def _on_failed(self, summary: str) -> None:
         self.append_log(f"FAILED: {summary}")

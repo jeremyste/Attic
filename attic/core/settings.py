@@ -44,6 +44,23 @@ class AppSettings:
     # Devices
     optical_device: str = "/dev/sr0"
     ddrescue_retries: int = 3
+    # ddrescue's own -T/--timeout: give up once this many minutes have passed
+    # since the last successful read (NOT total run time -- a mostly-good disk
+    # never trips this; only a stretch of genuinely stuck retries does). 0
+    # leaves ddrescue to try as long as it takes (the old, still-default
+    # behavior). Paired with ddrescue_retries as the speed/thoroughness dial:
+    # lower both for a "best effort" pass on media you don't need perfect, or
+    # a large batch you don't want one bad disc to stall for hours.
+    ddrescue_timeout_minutes: int = 0
+    # Which of ddrescue's four phases (copying -> trimming -> scraping ->
+    # retrying; see core.ddrescue.DDRESCUE_STOP_AFTER_CHOICES) to actually run.
+    # "full" is today's behavior (all four, ddrescue_retries retry passes).
+    # Earlier values give up sooner and are strictly faster but leave more of
+    # a damaged disk unrecovered -- e.g. "scraping" still sweeps every bad
+    # area sector-by-sector once but skips the (often slowest) repeated retry
+    # passes. Unrecognized values (e.g. from an older/newer settings file)
+    # fall back to "full" behavior in core.ddrescue.build_ddrescue_argv.
+    ddrescue_stop_after: str = "full"
     # Eject the tray once ddrescue has finished imaging the disc -- a physical
     # cue that it's safe to pull the disc and load the next one. Best-effort;
     # a missing `eject` binary or a drive that doesn't support it never fails

@@ -60,6 +60,14 @@ class MapSummary:
         return self.rescued_bytes / self.total_bytes if self.total_bytes else 0.0
 
 
+# ddrescue's own four-phase algorithm (see `info ddrescue` -> Algorithm):
+# copying (up to 5 sub-passes, not user-limitable) -> trimming (1 pass,
+# delimits bad blocks' edges) -> scraping (1 pass, sector-by-sector sweep of
+# what's left) -> retrying (up to --retry-passes, alternating direction).
+# Only "full" runs all four; each earlier value stops before the named phase.
+DDRESCUE_STOP_AFTER_CHOICES = ("copying", "trimming", "scraping", "full")
+
+
 def build_ddrescue_argv(
     device: str,
     image_path: str,
@@ -68,20 +76,46 @@ def build_ddrescue_argv(
     optical: bool = False,
     retries: int = 3,
     first_pass_only: bool = False,
+    timeout_minutes: int = 0,
+    stop_after: str = "full",
 ) -> list[str]:
     """Assemble a ddrescue invocation (to be wrapped with pkexec by the caller).
 
     ``optical`` sets a 2048-byte sector size and idirect read, appropriate for
     CD/DVD. ``first_pass_only`` skips the retry/scrape phases (``-n``) for a fast
-    initial pass whose summary the user then reviews.
+    initial pass whose summary the user then reviews -- equivalent to
+    ``stop_after="trimming"``, just named for that specific HDD workflow step.
+    ``timeout_minutes`` > 0 adds ``-T <n>m``, ddrescue's own "give up" clock --
+    it measures time since the *last successful read*, not total run time, so a
+    disk that is mostly readable never trips it; only a stretch of genuinely
+    stuck retries does.
+
+    ``stop_after`` is the "how many of ddrescue's phases should this job go
+    through" knob (see :data:`DDRESCUE_STOP_AFTER_CHOICES`): "copying" skips
+    trimming/scraping/retrying entirely (``-N -n``, fastest, keeps only the
+    easily-read majority), "trimming" additionally does the edge-delimiting
+    pass but skips scraping/retrying (``-n``), "scraping" runs everything but
+    the retry passes (``--retry-passes`` omitted), and "full" (the default,
+    today's behavior) also retries bad sectors up to ``retries`` times.
+    ``retries`` itself only matters when ``stop_after == "full"``.
     """
     argv = ["ddrescue"]
     if optical:
         argv += ["-b", "2048", "-d"]  # 2048-byte blocks, direct access
-    if first_pass_only:
-        argv += ["-n"]  # no scraping/retrying on the first pass
-    else:
+
+    no_trim = stop_after == "copying"
+    no_scrape = first_pass_only or stop_after in ("copying", "trimming")
+    no_retry = first_pass_only or stop_after in ("copying", "trimming", "scraping")
+
+    if no_trim:
+        argv += ["-N"]
+    if no_scrape:
+        argv += ["-n"]
+    if not no_retry:
         argv += [f"-r{retries}"]  # retry bad areas N times
+
+    if timeout_minutes > 0:
+        argv += ["-T", f"{timeout_minutes}m"]
     argv += [device, image_path, mapfile_path]
     return argv
 

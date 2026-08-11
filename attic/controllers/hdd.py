@@ -54,9 +54,14 @@ class HddRescueWorker(QThread):
     log = pyqtSignal(str)
     pass_done = pyqtSignal(object)  # MapSummary (final)
     failed = pyqtSignal(str)
+    # emitted instead of pass_done when a full cancel (not just "stop this
+    # pass early") won the race -- the tab discards the staging dir rather
+    # than offering the usual "run another pass / accept" choice.
+    aborted = pyqtSignal()
 
     def __init__(self, device: str, image_path: str, mapfile_path: str,
-                 stderr_path: str, *, first_pass: bool, retries: int = 3, parent=None):
+                 stderr_path: str, *, first_pass: bool, retries: int = 3,
+                 timeout_minutes: int = 0, stop_after: str = "full", parent=None):
         super().__init__(parent)
         self.device = device
         self.image_path = image_path
@@ -64,12 +69,27 @@ class HddRescueWorker(QThread):
         self.stderr_path = stderr_path
         self.first_pass = first_pass
         self.retries = retries
+        self.timeout_minutes = timeout_minutes
+        self.stop_after = stop_after
+        self._abort_requested = False
+
+    def request_skip(self) -> None:
+        """Stop this pass right away; whatever it rescued so far is kept and
+        the usual pass-complete choice (another pass / accept) still applies."""
+        self.requestInterruption()
+
+    def request_abort(self) -> None:
+        """Stop this pass and discard the whole job -- no pass-complete
+        choice, no extraction, nothing archived."""
+        self._abort_requested = True
+        self.requestInterruption()
 
     def run(self) -> None:
         self.stage.emit("Rescuing drive" if not self.first_pass else "Rescuing drive (first pass)")
         argv = build_ddrescue_argv(
             self.device, self.image_path, self.mapfile_path,
             first_pass_only=self.first_pass, retries=self.retries,
+            timeout_minutes=self.timeout_minutes, stop_after=self.stop_after,
         )
         self.log.emit(" ".join(argv))
         try:
@@ -80,6 +100,9 @@ class HddRescueWorker(QThread):
             )
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+        if self._abort_requested:
+            self.aborted.emit()
             return
         if outcome.returncode != 0 and (
             outcome.last_summary is None or outcome.last_summary.rescued_bytes == 0

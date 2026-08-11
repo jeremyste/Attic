@@ -131,6 +131,33 @@ def test_capture_failure_records_failed_row_no_finalize(qapp, tmp_path):
     assert ".tmp" in rows[0]["notes"]  # points at staging dir
 
 
+def test_capture_cancelled_records_cancelled_row_and_discards_staging(qapp, tmp_path):
+    wf = str(tmp_path)
+    ctx, _pending_panel = _make_context(qapp, wf)
+    staging = create_staging(wf, MediaType.OPTICAL, "s1")
+    with open(staging.child("disc.img"), "wb") as fh:
+        fh.write(b"\0")
+    request = JobRequest(
+        staging_root=wf, media_type=MediaType.OPTICAL, source_id="/dev/sr0",
+        session_id="s1",
+    )
+    ctx.processing_panel.start_job(
+        "s1", MediaType.OPTICAL, "Mix CD", supports_capture_control=True
+    )
+
+    ctx.record_capture_cancelled(request, staging)
+
+    assert ctx.finalize_pool.submitted == []
+    rows = catalog.read_rows(wf)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "cancelled"
+    assert "discarded" in rows[0]["notes"]
+    assert not os.path.exists(staging.path)  # nothing left to inspect
+    # finish_job() ran (row shows Cancelled); it lingers briefly before being
+    # dropped, so it's still present here rather than already removed.
+    assert ctx.processing_panel.rows() == ["[CD/DVD] Mix CD - Cancelled"]
+
+
 def test_pending_rename_updates_catalog_and_folder(qapp, tmp_path):
     wf = str(tmp_path)
     ctx, panel = _make_context(qapp, wf)

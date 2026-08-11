@@ -80,6 +80,11 @@ class HddTab(PipelineTab):
         context.finalize_pool.signals.done.connect(self._refresh_archive_panel)
         context.finalize_pool.signals.cancelled.connect(self._refresh_archive_panel)
 
+        panel = context.processing_panel
+        if panel is not None:
+            panel.capture_skip_requested.connect(self._on_capture_skip)
+            panel.capture_cancel_requested.connect(self._on_capture_cancel)
+
         self._install_common()
 
         self.begin_btn.clicked.connect(self._begin)
@@ -146,6 +151,7 @@ class HddTab(PipelineTab):
             panel.start_job(
                 self._request.session_id, MediaType.HDD,
                 outcome.physical_label or device.path,
+                supports_capture_control=True,
             )
 
         self.bar.clear()
@@ -216,12 +222,15 @@ class HddTab(PipelineTab):
         worker = HddRescueWorker(
             device_path, self._image_path, self._log_path, self._stderr_path,
             first_pass=first_pass, retries=self.context.settings.ddrescue_retries,
+            timeout_minutes=self.context.settings.ddrescue_timeout_minutes,
+            stop_after=self.context.settings.ddrescue_stop_after,
         )
         worker.map_progress.connect(self.bar.set_summary)
         worker.stage.connect(self.set_stage)
         worker.log.connect(self.append_log)
         worker.pass_done.connect(lambda s: self._on_pass_done(device_path, s))
         worker.failed.connect(self._on_failed)
+        worker.aborted.connect(self._on_rescue_aborted)
         panel = self.context.processing_panel
         if panel is not None and self._request is not None:
             jid = self._request.session_id
@@ -233,6 +242,22 @@ class HddTab(PipelineTab):
             )
         self._rescue = worker
         worker.start()
+
+    def _on_capture_skip(self, job_id: str) -> None:
+        if self._rescue is not None and self._request is not None \
+                and self._request.session_id == job_id:
+            self._rescue.request_skip()
+
+    def _on_capture_cancel(self, job_id: str) -> None:
+        if self._rescue is not None and self._request is not None \
+                and self._request.session_id == job_id:
+            self._rescue.request_abort()
+
+    def _on_rescue_aborted(self) -> None:
+        request, staging_dir = self._request, self._staging
+        self.context.record_capture_cancelled(request, staging_dir)
+        self.set_stage("Cancelled - ready for next drive")
+        self.set_busy(False)
 
     def _on_pass_done(self, device_path: str, summary: MapSummary | None) -> None:
         bad = summary.bad_bytes if summary else 0
